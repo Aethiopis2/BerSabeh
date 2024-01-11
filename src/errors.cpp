@@ -1,46 +1,49 @@
-//==========================================================================================================|
-// System-Errors.h:
-//  Defintions for errors.h file
-//
-// Program Authors:
-//  Rediet Worku aka Aethiopis II ben Zahab
-//
-// Date Created:
-//  6th of June 2022, Monday.
-//
-// Last Updated:
-//  15th of July 2023, Saturday.
-//==========================================================================================================|
+/**
+ * @file errors.cpp
+ * @author Rediet Worku aka Aethiopis II ben Zahab (PanaceaSolutionsEth@Gmail.com)
+ * 
+ * @brief Implementation detail for errors.h
+ * @version 1.2
+ * @date 2022-07-06
+ * 
+ * @copyright Copyright (c) 2024
+ * 
+ */
 
 
-//==========================================================================================================|
-//  INCLUDES
-//==========================================================================================================|
+
+//===============================================================================|
+//          INCLUDES
+//===============================================================================|
 #include "errors.h"
 
 
-//==========================================================================================================|
-//  MACROS
-//==========================================================================================================|
+//===============================================================================|
+//          MACROS
+//===============================================================================|
 
 
 
-//==========================================================================================================|
-//  GLOBALS
-//==========================================================================================================|
+//===============================================================================|
+//          GLOBALS
+//===============================================================================|
 
 
 
-//==========================================================================================================|
-//  FUNCTIONS
-//==========================================================================================================|
+//===============================================================================|
+//          FUNCTIONS
+//===============================================================================|
 /**
- * Output_Err:
- *  this is the function that does the actual printing of messages to either the console or a log file, 
- *  depending on the defintions for the external daemon_proc global. Should this external variable be set then
- *  we would be logging to log file using syslog() system call alas output goes to the standard output and
- *  error streams.
+ * @brief this is the function that does the actual printing of messages to either 
+ *  the console or a log file, depending on the defintions for the external 
+ *  daemon_proc global. Should this external variable be set then we would be logging 
+ *  to log file using syslog() system call alas output goes to the standard output 
+ *  and error streams.
  * 
+ * @param errno_flag 0 to mean app sepecific error, while 1 to mean syscall error
+ * @param level used for syslog()
+ * @param fmt formatted buffer
+ * @param ap list of variable length parameters
  */
 static void Output_Err(int errno_flag, int level, const char *fmt, va_list ap)
 {
@@ -50,12 +53,7 @@ static void Output_Err(int errno_flag, int level, const char *fmt, va_list ap)
 
     int saved_errno = errno;        /* save the errno */
 
-#ifdef HAVE_VSNPRINTF                 /* some systems may not yet define vsnprintf function as its relatively new */
     vsnprintf(buf, MAX_LINE, fmt, ap);
-#else
-    vsprintf(buf, fmt, ap);         /* or use the unsafe version/depreciated */
-#endif
-
     n = strlen(buf);
 
     // test if we have the errno flag set
@@ -73,20 +71,21 @@ static void Output_Err(int errno_flag, int level, const char *fmt, va_list ap)
         fflush(stderr);*/
 
         // do it the C++ way
-        std::cerr << "\033[31m\t*** Err: \033[33m" << buf << "\033[37m";
+        std::cerr << "\033[31m\t*** Err: \033[33m" << buf << "\033[37m" << std::endl;
     } // end else
 } // end Output_Err
 
 
 
-//==========================================================================================================|
+//===============================================================================|
 /**
- * Terminate:
- *  terminates the process in one of the following ways. If the env't variable EF_DUMPCORE has been defined
- *  it calls abort to produce an error dump, or using exit() or _exit() system calls which have the effect of
- *  flushing the buffer in the latter case
+ * @brief terminates the process in one of the following ways. If the env't 
+ *  variable EF_DUMPCORE has been defined it calls abort to produce an error dump, 
+ *  or using exit() or _exit() system calls which have the effect of flushing the 
+ *  buffer in the latter case
  * 
  * @param use_exit3 boolean value indicating which way to end; using exit or _exit.
+ * 
  */
 static void Terminate(Boolean use_exit3)
 {
@@ -107,12 +106,11 @@ static void Terminate(Boolean use_exit3)
 
 
 
-//==========================================================================================================|
+//===============================================================================|
 /**
- * Dump_Err 
- *  this function is used to print/dump messages (error or not) into the standard output stream if daemon_proc
- *  global has been defined to be 0. If not, then all output goes to the loggig system using syslog() function
- *  call.
+ * @brief function is used to print/dump messages (error or not) into the standard 
+ *  output stream if daemon_proc global has been defined to be 0. If not, then all 
+ *  output goes to the loggig system using syslog() function call.
  *  
  * @param fmt string containing error description along with formatting options if any
  */
@@ -127,11 +125,10 @@ void Dump_Err(const char *fmt, ...)
 
 
 
-//==========================================================================================================|
+//===============================================================================|
 /**
- * Dump_Err_Exit
- *  Same as Dump_Err function only difference is this is used to abruptly terminate the process with/without
- *  some core dump files produced.
+ * @brief as Dump_Err function only difference is this is used to abruptly 
+ *  terminate the process with/without some core dump files produced.
  *  
  * @param fmt string containing error description along with formatting options if any
  */
@@ -148,11 +145,11 @@ void Dump_Err_Exit(const char *fmt, ...)
 
 
 
-//==========================================================================================================|
+//===============================================================================|
 /**
- * @brief 
- *  this function is used for dumping errors of non system call origin to console/log file and terminate the
- *  application, since these are application wide fatal errors.
+ * @brief this function is used for dumping errors of non system call origin to 
+ *  console/log file and terminate the application, since these are application 
+ *  wide fatal errors.
  * 
  * @param fmt string containing error description along with formatting options if any
  */
@@ -169,11 +166,10 @@ void Fatal(const char *fmt, ...)
 
 
 
-//==========================================================================================================|
+//===============================================================================|
 /**
- * @brief 
- *  Dump's application specific errors, much like Dump_Err & Dump_Err_Exit, except this won't kill the app
- *  or use the standard err no.
+ * @brief Dump's application specific errors, much like Dump_Err & Dump_Err_Exit, 
+ *  except this won't kill the app or use the standard err no.
  * 
  * @param fmt string containing error description along with formatting options if any 
  */
@@ -185,9 +181,3 @@ void Dump_App_Err(const char *fmt, ...)
     Output_Err(0, LOG_INFO, fmt, arg_list);
     va_end(arg_list);
 } // end Dump_App_Err
-
-
-
-//==========================================================================================================|
-//          THE END
-//==========================================================================================================|

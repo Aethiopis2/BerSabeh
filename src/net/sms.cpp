@@ -24,16 +24,8 @@
 //===============================================================================|
 //        MACROS
 //===============================================================================|
-#define SET_PDU_HEADER(buf, command_len, command_id, status, snum) { command_len=HTONL(command_len);\
-    iCpy(buf, &command_len, sizeof(u32)); \
-    buf+=sizeof(u32); u32 cid=HTONL(command_id);\
-    iCpy(buf, &cid, sizeof(u32)); \
-    buf+=sizeof(32); u32 s=HTONL(status);\
-    iCpy(buf, &s, sizeof(u32)); \
-    buf+=sizeof(u32); u32 sn=HTONL(snum);\
-    iCpy(buf, &sn, sizeof(u32));\
-    buf+=sizeof(u32);\
-}
+
+
 
 
 
@@ -42,7 +34,8 @@
 //        GLOBALS
 //===============================================================================|
 int sms_state{SMS_DISCONNECTED};    // tracks the state of interface
-Sms::Command_Hdr cmd_hdr;           // a command header info SMS PDU format
+Sms::Command_Hdr cmd_hdr;
+int seq_num{0};                     // tracks the sequence # of packets
 std::string err_desc;               // a little error description buffer
 
 
@@ -75,46 +68,65 @@ int Connect_Tcp(std::string hostname, std::string port)
 
 
 //===============================================================================|
-int Bind_Trx(const std::string hostname, const std::string port, 
+/**
+ * @brief Sends a bind_transceiver message to SMSC, which enables the interface
+ *  to both send and receive sms messages. If successful it sets, the state of
+ *  the sms interface to bound.
+ * 
+ * @param hostname ip/hostname to connect to; i.e. SMSC
+ * @param port the port # as string
+ * @param sys_id a system identefier (acquired from SMSC)
+ * @param pwd the pwd given by SMSC to authenticate user
+ * @return int socket desc on success with interface bound; alas -1 on sys error, 
+ *  -2 on app error
+ */
+int Sms::Bind_Trx(const std::string hostname, const std::string port, 
   std::string sys_id, std::string pwd)
 {
     char buffer[98]{0};
-    char *alias{buffer};
-    char interface_version = 0x34;
+    char *alias{buffer+sizeof(cmd_hdr)};
+    char interface_version = SMS_VER;
+    char ton = TON_NATIONAL;    // type of number, we are using national code
+    char npi = NPI_NATIONAL;    // don't go further from national thing
+    int fds{-1};
 
-    if (Connect_Tcp(hostname, port) < 0)
+    if ( (fds = Connect_Tcp(hostname, port)) < 0)
       return -1;
-
-    u32 sysid_len = (sys_id.length() > 15 ? 15 : (u32)sys_id.length());
-    u32 pwd_len = (pwd.length() > 8 ? 8 : (u32)pwd.length());
 
 
     if (sms_state & SMS_CONNECTED)
     {
-        u32 len = sysid_len + pwd_len + 22;
-        SET_PDU_HEADER(alias, len, bind_transceiver, 0, ++seq_num);
+      cmd_hdr.command_id = HTONL(bind_transceiver);
+      cmd_hdr.sequence_num = HTONL(++seq_num);
+      cmd_hdr.command_status = 0;   // unused
 
-        // system id
-        iCpy(alias, sys_id.c_str(), sysid_len);
-        alias += (sysid_len + 1);
+      // copy the payload info, begining with system id, followed by password
+      //  interface and anyother mandate.
+      u32 sysid_len = (sys_id.length() > 15 ? 15 : (u32)sys_id.length());
+      u32 pwd_len = (pwd.length() > 8 ? 8 : (u32)pwd.length());
 
-        // password
-        iCpy(alias, pwd.c_str(), pwd_len);
-        alias += (pwd_len + 2);
+      iCpy(alias, sys_id.c_str(), sysid_len);
+      alias += (sysid_len + 1);
 
-        // interface version, skipping over system type
-        iCpy(alias++, &interface_version, 1);
-        alias += 3;
+      // password, +2 because we are skipping over system type, as null
+      iCpy(alias, pwd.c_str(), pwd_len);
+      alias += (pwd_len + 2);
 
-        // extended
-        //iCpy(alias++, &empty, 1);   // system type
-        //iCpy(alias++, &empty, 1);   // interface version
-        //iCpy(alias++, &empty, 1);   // addr_ton
-        //iCpy(alias++, &empty, 1);   // addr_npi
-        //iCpy(alias++, &empty, 1);   // addr_range
+      // interface version, type of number and numbering plan indicator
+      iCpy(alias++, &interface_version, 1);
+      iCpy(alias++, &ton, 1);
+      iCpy(alias++, &npi, 1);
+      ++alias;    // for address range
 
-        // get it on the go
-        return TcpClient::Send(buffer, alias - buffer);
+      cmd_hdr.command_length = NTOHL(alias - buffer);
+      iCpy(buffer, &cmd_hdr, sizeof(cmd_hdr));
+
+      Dump_Hex(buffer, alias - buffer);
+      if (TcpClient::Send(buffer, alias - buffer) < 0)
+        return -1;
+
+      sms_state = SMS_BOUND_TRX;
+      return fds;
     } // end if connected
 
     err_desc = "Underlying network not connected.";
@@ -125,21 +137,23 @@ int Bind_Trx(const std::string hostname, const std::string port,
 
 //===============================================================================|
 /**
- * @brief Send's an enquire link to SMSC
+ * @brief Send's an enquire link to SMSC; this is nice for heartbeat implementaton
  * 
  * @return int -ve on fail alas 0 on success
  */
 int Sms::Enquire()
 {
-  char buffer[16]{0};
-  char *alias{buffer};
-  u32 len{16};    // header len
-
   if (sms_state & SMS_BOUND_TRX)
   {
-    SET_PDU_HEADER(alias, len, enquire_link, 0, ++seq_num);
-    return net.Send(buffer, alias - buffer);
-  } 
+    cmd_hdr.command_id = HTONL(enquire_link);
+    cmd_hdr.sequence_num = HTONL(++seq_num);
+    cmd_hdr.command_length = HTONL(sizeof(cmd_hdr));
+
+    if (TcpClient::Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+      return -1;
+
+    return 0;
+  } // end if bount 
 
   err_desc = "Interface not bound";
   return -2;
@@ -148,21 +162,24 @@ int Sms::Enquire()
 
 //===============================================================================|
 /**
- * @brief Sends an enquire_link response to SMSC
+ * @brief Sends an enquire_link response to SMSC; since the actual enquire link
+ *  can be initiated from both sides at any moment
  * 
  * @return int a -ve on fail, 0 on success
  */
-int Sms::SmsEnquire_Rsp()
+int Sms::Enquire_Rsp()
 {
-  char buffer[16]{0};
-  char *alias{buffer};
-  u32 len{16};    // header len
-
   if (sms_state & SMS_BOUND_TRX)
   {
-    SET_PDU_HEADER(alias, len, enquire_link_resp, 0, ++seq_num);
-    return net.Send(buffer, alias - buffer);
-  } 
+    cmd_hdr.command_length = sizeof(cmd_hdr);
+    cmd_hdr.command_id = HTONL(enquire_link_resp);
+    cmd_hdr.sequence_num = HTONL(++seq_num);
+
+    if (TcpClient::Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+      return -1;
+
+    return 0;
+  } // end Enquire_Rsp
 
   err_desc = "Interface not bound";
   return -2;
@@ -179,10 +196,10 @@ int Sms::Submit(std::string msg, std::string dest_num, const int id)
   {
     u8 msg_len = (msg.length() > 254 ? 254 : msg.length());
     u16 dest_len = (dest_num.length() > 20 ? 20 : dest_num.length());
-    u32 pack_len = 33 + dest_len + msg_len;
+    //u32 pack_len = 33 + dest_len + msg_len;
 
 
-    SET_PDU_HEADER(alias, pack_len, submit_sm, 0, ++seq_num);
+    //SET_PDU_HEADER(alias, pack_len, submit_sm, 0, ++seq_num);
     alias += 6;
 
     iCpy(alias, dest_num.c_str(), dest_len);
@@ -202,7 +219,7 @@ int Sms::Submit(std::string msg, std::string dest_num, const int id)
     alias += (msg_len + 1);
 
     Dump_Hex(buffer, alias- buffer);
-    return net.Send(buffer, alias - buffer);
+    //return net.Send(buffer, alias - buffer);
   } // end if bounded
 
   err_desc = "SMS interface not bound";

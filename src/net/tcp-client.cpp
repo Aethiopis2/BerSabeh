@@ -4,7 +4,7 @@
  * 
  * @brief implementation for tcp-client.h functions
  * @version 0.1
- * @date 2022-10-18
+ * @date 2022-07-18
  * 
  * @copyright Copyright (c) 2024
  * 
@@ -79,7 +79,7 @@ int Fill_Addr(const std::string &hostname, const std::string &port)
  * @param hostname ip address or hostname to connect to
  * @param port aka the port number or service name
  * 
- * @return int a 0 on success, -1 on fail.
+ * @return int a socket descriptor on success, -1 on fail.
  */
 int TcpClient::Connect(const std::string hostname, const std::string port)
 {
@@ -95,7 +95,7 @@ int TcpClient::Connect(const std::string hostname, const std::string port)
             continue; 
 
         if (connect(conn.fds, p_alias->ai_addr, p_alias->ai_addrlen) == 0)
-            return 0;       // success
+            return conn.fds;       // success
 
         TcpClient::Disconnect();
     } while ( (p_alias = p_alias->ai_next) != NULL);
@@ -158,7 +158,7 @@ int TcpClient::Send(const char *buffer, const size_t len)
     int total{0};
     int n;
 
-    while ( (n = send(conn.fds, buffer + total, len - total, 0)) > 0 && (total < len))
+    while ( (n = send(conn.fds, buffer + total, len - total, 0)) > 0 && ((size_t)total < len))
         total += n;
 
     return total;

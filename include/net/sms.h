@@ -96,7 +96,7 @@
 #define NPI_WAP_CLIENTID        18      // to be defined by WAP Forum
 
 
-
+#define SMS_VER         0x34            // smpp version
 
 //===============================================================================|
 //              GLOBALS
@@ -131,7 +131,8 @@ namespace Sms
 //===============================================================================|
 //              PROTOTYPES
 //===============================================================================|
-    int Bind_Trx(std::string sys_id, std::string pwd);
+    int Bind_Trx(std::string hostname, std::string port, 
+        std::string sys_id, std::string pwd);
     int Enquire();
     int Enquire_Rsp();
     int Submit(std::string msg, std::string dest_num, const int id);
