@@ -1,24 +1,23 @@
 /**
- * @file tcp-client.h
+ * @file TcpBase.h
  * @author Rediet Worku aka Aethiopis II ben Zahab (Aethiopis2rises@gmail.com)
  * 
- * @brief Prototypes/wrapper functions for basic tcp based system calls; tailed
- *  for tcp enabled clients running on IPv4/v6.
+ * @brief Definition for base functions of any tcp based client or server.
  * @version 0.1
- * @date 2022-07-18
+ * @date 2024-01-12
  * 
  * @copyright Copyright (c) 2024
  * 
  */
-#ifndef TCP_CLIENT_H
-#define TCP_CLIENT_H
+#ifndef TCP_BASE_H
+#define TCP_BASE_H
 
 
 
 //===============================================================================|
 //          INCLUDES
 //===============================================================================|
-#include "tcp-base.h"
+#include "basics.h"
 
 
 
@@ -27,7 +26,21 @@
 //===============================================================================|
 //          MACROS
 //===============================================================================|
+// this macro get's defined for the platform at hand
+#if defined(__unix__) || defined(__linux__)
+#define CLOSE(s)    close(s)
+#else 
+#if defined(WIN32) || defined(__WIN64)
+#define CLOSE(s)    closesocket(s);
+#endif
+#endif
 
+
+
+
+// Connection/Socket states
+#define APP_SOCK_WAIT        0       // is waiting or has completed recv
+#define APP_SOCK_RECV        1       // is getting some
 
 
 
@@ -35,6 +48,7 @@
 //===============================================================================|
 //          TYPES
 //===============================================================================|
+   
 
 
 
@@ -42,26 +56,20 @@
 //===============================================================================|
 //          CLASS
 //===============================================================================|
-class TcpClient : public TcpBase
+class TcpBase
 {
 public:
 
-    TcpClient();
-    TcpClient(const std::string hostname, const std::string port);
-    ~TcpClient();
+    TcpBase();
+    int Send(const char *buffer, const size_t len);
+    int Recv(char *buffer, const size_t len);
+    int Get_Socket() const;
+    int Get_State() const;
+    
+protected:
 
-    int Connect(const std::string &hostname, const std::string &port);
-    int Disconnect();
-
-
-    //addrinfo *Get_Addr() const;
-    //sockaddr_storage Get_Addr_Storage() const;
-private:
-
-    struct addrinfo *paddr;         // a protocol independant network address stuct
-
-    /* Utlity */
-    int Fill_Addr(const std::string &hostname, const std::string &port);
+    int fds;        // the socket descriptor
+    int state;      // the state of the socket; when applicable
 };
 
 

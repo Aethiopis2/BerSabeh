@@ -24,7 +24,9 @@
 //===============================================================================|
 //        MACROS
 //===============================================================================|
-
+#define SET_PDU_HEADR(cmd, len, id, stat, seq) { cmd.command_length = HTONL(len);\
+  cmd.command_id = HTONL(id); cmd.command_status=HTONL(stat); \
+  cmd.sequence_num = HTONL(seq); }
 
 
 
@@ -33,10 +35,7 @@
 //===============================================================================|
 //        GLOBALS
 //===============================================================================|
-int sms_state{SMS_DISCONNECTED};    // tracks the state of interface
-Sms::Command_Hdr cmd_hdr;
-int seq_num{0};                     // tracks the sequence # of packets
-std::string err_desc;               // a little error description buffer
+
 
 
 
@@ -44,26 +43,75 @@ std::string err_desc;               // a little error description buffer
 
 
 //===============================================================================|
-//        FUNCTIONS
+//        CLASS IMP
 //===============================================================================|
 /**
- * @brief Connects to server/SMSC using TCP/IP enabled network. Set's the state 
- *  to SMS_CONNECTED
+ * @brief Construct a new Sms:: Sms object
+ *  does not do anything useful
+ */
+Sms::Sms()
+  :bdebug{false}, sms_state{SMS_DISCONNECTED}, seq_num{0} 
+{
+  service_type = ST_NULL;
+  esm_class = ESM_DEFAULT;
+  ton = TON_NATIONAL;
+  npi = NPI_NATIONAL;
+  protocol_id = 0;
+  priority_flag = 1;      // normal priority in most cases
+  schedule_delivery_time = "";
+  validity_period  = "";
+  registered_delivery = REG_DELV_REQ_RECEIPT;
+  replace_present = 1;    // replace previous message if present
+  data_coding = DATA_CODE_DEFAULT;
+  sm_id = 0;              // short message id set by SMSC during *_rsp messages
+  interface_ver = SMS_VER;
+} // end Constructor
+
+
+
+//===============================================================================|
+/**
+ * @brief Construct a new Sms:: Sms object Connects to server/SMSC using TCP/IP 
+ *  enabled network. Set's the state to SMS_CONNECTED. Throws a runtime error.
  * 
  * @param hostname host ip, name or SMSC
  * @param port port for SMSC
- * 
- * @return int 0 on success alas -1 
  */
-int Connect_Tcp(std::string hostname, std::string port)
+Sms::Sms(std::string hostname, std::string port, bool debug)
+  :bdebug{debug}, sms_state{SMS_DISCONNECTED}, seq_num{0}
 {
-    if (TcpClient::Connect(hostname, port) < 0)
-        return -1;
+  if (TcpClient::Connect(hostname, port) < 0)
+    throw std::runtime_error("tcp connection fail.");
 
-    //psms_thread = new std::thread(Run);
-    sms_state = SMS_CONNECTED;
-    return 0;
-} // end if Connect_Tcp
+  sms_state = SMS_CONNECTED;
+
+  service_type = ST_NULL;
+  esm_class = ESM_DEFAULT;
+  ton = TON_NATIONAL;
+  npi = NPI_NATIONAL;
+  protocol_id = 0;
+  priority_flag = 1;      // normal priority in most cases
+  schedule_delivery_time = "";
+  validity_period  = "";
+  registered_delivery = REG_DELV_REQ_RECEIPT;
+  replace_present = 1;    // replace previous message if present
+  data_coding = DATA_CODE_DEFAULT;
+  sm_id = 0;              // short message id set by SMSC during *_rsp messages
+  interface_ver = SMS_VER;
+} // end constructor
+
+
+
+//===============================================================================|
+/**
+ * @brief Destroy the Sms:: Sms object
+ * 
+ */
+Sms::~Sms()
+{
+  Unbind();
+  TcpClient::Disconnect();
+} // end Destructor
 
 
 
@@ -73,65 +121,107 @@ int Connect_Tcp(std::string hostname, std::string port)
  *  to both send and receive sms messages. If successful it sets, the state of
  *  the sms interface to bound.
  * 
- * @param hostname ip/hostname to connect to; i.e. SMSC
- * @param port the port # as string
  * @param sys_id a system identefier (acquired from SMSC)
  * @param pwd the pwd given by SMSC to authenticate user
- * @return int socket desc on success with interface bound; alas -1 on sys error, 
- *  -2 on app error
+ * @return int 0 on success with interface bound; alas -2 on app error
  */
-int Sms::Bind_Trx(const std::string hostname, const std::string port, 
-  std::string sys_id, std::string pwd)
+int Sms::Bind_Trx(const std::string &sys_id, const std::string &pwd)
 {
-    char buffer[98]{0};
-    char *alias{buffer+sizeof(cmd_hdr)};
-    char interface_version = SMS_VER;
-    char ton = TON_NATIONAL;    // type of number, we are using national code
-    char npi = NPI_NATIONAL;    // don't go further from national thing
-    int fds{-1};
+  char buffer[98]{0};
+  char *alias{buffer+sizeof(cmd_hdr)};
+  
+  // do a trivial rejection
+  if (sys_id.length() > 15 || pwd.length() > 8)
+  {
+    err_desc = "System id and/or password does not meet SMPPv3.4 specs.";
+    err_desc += " System id must not be 15 and password 8 characters long.";
+    return -2;
+  } // end if no good length
 
-    if ( (fds = Connect_Tcp(hostname, port)) < 0)
+  if (sms_state & SMS_CONNECTED)
+  {
+    iCpy(alias, sys_id.c_str(), sys_id.length());
+    alias += (sys_id.length() + 1);
+
+    // password, +2 because we are skipping over system type, as null
+    iCpy(alias, pwd.c_str(), pwd.length());
+    alias += (pwd.length() + 2);
+
+    // interface version, type of number and numbering plan indicator
+    iCpy(alias++, &interface_ver, 1);
+    iCpy(alias++, &ton, 1);
+    iCpy(alias++, &npi, 1);
+    ++alias;    // for address range
+
+    SET_PDU_HEADR(cmd_hdr, alias - buffer, bind_transceiver, 0, ++seq_num);
+    iCpy(buffer, &cmd_hdr, sizeof(cmd_hdr));
+
+    if (bdebug)
+      Dump_Hex(buffer, alias - buffer);
+
+    if (Send(buffer, alias - buffer) < 0)
       return -1;
 
+    sms_state = SMS_BOUND_TRX;
+    return 0;
+  } // end if connected
 
-    if (sms_state & SMS_CONNECTED)
-    {
-      cmd_hdr.command_id = HTONL(bind_transceiver);
-      cmd_hdr.sequence_num = HTONL(++seq_num);
-      cmd_hdr.command_status = 0;   // unused
-
-      // copy the payload info, begining with system id, followed by password
-      //  interface and anyother mandate.
-      u32 sysid_len = (sys_id.length() > 15 ? 15 : (u32)sys_id.length());
-      u32 pwd_len = (pwd.length() > 8 ? 8 : (u32)pwd.length());
-
-      iCpy(alias, sys_id.c_str(), sysid_len);
-      alias += (sysid_len + 1);
-
-      // password, +2 because we are skipping over system type, as null
-      iCpy(alias, pwd.c_str(), pwd_len);
-      alias += (pwd_len + 2);
-
-      // interface version, type of number and numbering plan indicator
-      iCpy(alias++, &interface_version, 1);
-      iCpy(alias++, &ton, 1);
-      iCpy(alias++, &npi, 1);
-      ++alias;    // for address range
-
-      cmd_hdr.command_length = NTOHL(alias - buffer);
-      iCpy(buffer, &cmd_hdr, sizeof(cmd_hdr));
-
-      Dump_Hex(buffer, alias - buffer);
-      if (TcpClient::Send(buffer, alias - buffer) < 0)
-        return -1;
-
-      sms_state = SMS_BOUND_TRX;
-      return fds;
-    } // end if connected
-
-    err_desc = "Underlying network not connected.";
-    return -2;
+  err_desc = "Underlying network not connected.";
+  return -2;
 } // end Bind_Tx
+
+
+
+
+//===============================================================================|
+/**
+ * @brief Sends Unbind signal to terminate the bound state
+ * 
+ * @return int 0 on success alas -ve on fail
+ */
+int Sms::Unbind()
+{
+  if (sms_state & SMS_BOUND_TRX)
+  {
+    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr), unbind, 0, ++seq_num);
+    if (bdebug)
+      Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
+
+    if (Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+      return -1;
+
+    return 0;
+  } // end if bount 
+
+  err_desc = "Interface not bound";
+  return -2;
+} // end UnBind
+
+
+
+//===============================================================================|
+/**
+ * @brief Sends an Unbind_Response with an OK to terminate the session. 
+ * 
+ * @return int 0 on success -ve on fail
+ */
+int Sms::Unbind_Resp()
+{
+  if (sms_state & SMS_BOUND_TRX)
+  {
+    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr), unbind_resp, 0, cmd_hdr.sequence_num);
+    if (bdebug)
+      Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
+
+    if (Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+      return -1;
+
+    return 0;
+  } // end if bount 
+
+  err_desc = "Interface not bound";
+  return -2;
+} // end UnBind_Resp
 
 
 
@@ -145,11 +235,11 @@ int Sms::Enquire()
 {
   if (sms_state & SMS_BOUND_TRX)
   {
-    cmd_hdr.command_id = HTONL(enquire_link);
-    cmd_hdr.sequence_num = HTONL(++seq_num);
-    cmd_hdr.command_length = HTONL(sizeof(cmd_hdr));
+    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr), enquire_link, 0, ++seq_num);
+    if (bdebug)
+      Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
 
-    if (TcpClient::Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+    if (Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
       return -1;
 
     return 0;
@@ -171,11 +261,11 @@ int Sms::Enquire_Rsp()
 {
   if (sms_state & SMS_BOUND_TRX)
   {
-    cmd_hdr.command_length = sizeof(cmd_hdr);
-    cmd_hdr.command_id = HTONL(enquire_link_resp);
-    cmd_hdr.sequence_num = HTONL(++seq_num);
+    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr), enquire_link_resp, ESME_ROK, cmd_hdr.sequence_num);
+    if (bdebug)
+      Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
 
-    if (TcpClient::Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+    if (Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
       return -1;
 
     return 0;
@@ -187,39 +277,107 @@ int Sms::Enquire_Rsp()
 
 
 //===============================================================================|
-int Sms::Submit(std::string msg, std::string dest_num, const int id)
+/**
+ * @brief Submits short messages to SMSC. If the message length exceeds 254 it
+ *  will use payload_message optional feild. However even here, it must not exceed
+ *  65,534 characters long.
+ * 
+ * @param msg the message to send
+ * @param dest_num phone num of the receipent
+ * @return int 0 on success alas -ve on fail
+ */
+int Sms::Submit(std::string msg, std::string dest_num)
 {
-  char buffer[512]{0};
-  char *alias{buffer};
+  char buffer[512 + 65'536]{0};
+  char *alias{buffer + sizeof(cmd_hdr)};
+
+  if (dest_num.length() > 20)
+  {
+    err_desc = "destination number can not exceed 20 characters.";
+    return -2;
+  } // end if dest num
 
   if (sms_state & SMS_BOUND_TRX)
   {
-    u8 msg_len = (msg.length() > 254 ? 254 : msg.length());
-    u16 dest_len = (dest_num.length() > 20 ? 20 : dest_num.length());
-    //u32 pack_len = 33 + dest_len + msg_len;
+    // skip over source_addr_ton, source_addr_npi, source_addr
+    *alias++ = service_type;   // the service type
+    alias += 3;
 
+    *alias++ = ton;   // dest ton
+    *alias++ = npi;   // dest npi
 
-    //SET_PDU_HEADER(alias, pack_len, submit_sm, 0, ++seq_num);
-    alias += 6;
+    // copy the dest addr aka phone no
+    iCpy(alias, dest_num.c_str(), dest_num.length());
+    alias += (dest_num.length() + 1);
 
-    iCpy(alias, dest_num.c_str(), dest_len);
-    alias += (dest_len + 1);
-    *(++alias) = 0x02;      // esm class
-    *(++alias) = 0x0;       // prtocol id
-    *(++alias) = 0x01;      // priority flag
-    *(++alias) = 0x0;       // schedule delivery time
-    *(++alias) = 0x0;       // default validty period
-    *(++alias) = 0x01;      // require delivery reports
-    *(++alias) = 0x0;       // replace existing
-    *(++alias) = 0x0;       // data coding
-    *(++alias) = 0x0;       // sm default message id
+    *(alias++) = esm_class;   // esm class
+    *(alias++) = 0x0;         // prtocol id
+    *(alias++) = priority_flag;      // priority flag
+
+    if (schedule_delivery_time.length() == 0)
+      *(alias++) = 0x0;       // schedule delivery time
+    else 
+    {
+      if (schedule_delivery_time.length() > 16)
+      {
+        err_desc = "Invaild time format in delivery time.";
+        return -2;
+      } // end if bad newz
+
+      iCpy(alias, schedule_delivery_time.c_str(), schedule_delivery_time.length());
+      alias += (schedule_delivery_time.length() + 1);
+    } // end else scheduling
+
+    if (validity_period.length() == 0)
+      *(alias++) = 0x0;       // default validty period
+    else 
+    {
+      if (validity_period.length() > 16)
+      {
+        err_desc = "Invaild time format in validity period.";
+        return -2;
+      } // end if bad newz
+
+      iCpy(alias, validity_period.c_str(), validity_period.length());
+      alias += (validity_period.length() + 1);
+    } // end else set validity period
     
-    iCpy(alias++, &msg_len, 1);
-    iCpy(alias, msg.c_str(), msg_len);
-    alias += (msg_len + 1);
+    *(alias++) = registered_delivery;      // require delivery reports
+    *(alias++) = replace_present;          // replace existing
+    *(alias++) = data_coding;              // data coding
+    *(alias++) = 0x0;                      // sm default message id (for canned messages)
+    
+    u8 msg_len = msg.length();
+    if (msg_len < 255)
+    {
+      iCpy(alias++, &msg_len, 1);
+      iCpy(alias, msg.c_str(), msg_len);
+      alias += (msg_len + 1);
+    } // end if message less than 255 chars long
+    else 
+    {
+      // message exceeds 254 characters. Send as payload optional data
+      *(alias++) = 0x0;   // sm_length
+      *(alias++) = 0x0;   // sm_message
 
-    Dump_Hex(buffer, alias- buffer);
-    //return net.Send(buffer, alias - buffer);
+      // trim the message if it exceeds unreasonably
+      u16 param = MESSAGE_PAYLOAD;
+      msg_len = (msg_len > 65354 ? 65534 : msg_len);
+      iCpy(alias, &param, sizeof(u16));   // the parameter
+      alias += 2;
+      iCpy(alias, &msg_len, sizeof(u16)); // the length
+      alias += 2;
+      iCpy(alias, msg.c_str(), msg_len);
+      alias += (msg_len + 1);
+    } // end else long message
+
+    SET_PDU_HEADR(cmd_hdr, alias - buffer, submit_sm, 0, ++seq_num);
+    iCpy(buffer, &cmd_hdr, sizeof(cmd_hdr));
+
+    if (bdebug)
+      Dump_Hex(buffer, alias - buffer);
+    
+    return Send(buffer, alias - buffer);
   } // end if bounded
 
   err_desc = "SMS interface not bound";
@@ -229,21 +387,36 @@ int Sms::Submit(std::string msg, std::string dest_num, const int id)
 
 
 //===============================================================================|
-void Sms::Process_Incoming(char *buffer, const u32 len)
+int Sms::Process_Incoming(char *buffer, const u32 len)
 {
-    if (len == 0)
-    return;
+  if (len == 0)
+    return 0;
 
-  Dump_Hex(buffer, len);
+  if (bdebug)
+    Dump_Hex(buffer, len);
 
   // now let's act on the response and do stuff up (like updating dbs and all)
-  switch (NTOHL(*((u32*)(buffer + 4))))
+  Command_Hdr_Ptr phdr = (Command_Hdr_Ptr)buffer;
+  switch (NTOHL(phdr->command_id))
   {
     case bind_transceiver_resp:
     {
-      std::cout << "Transceiver bounded" << std::endl;
+      if (NTOHL(phdr->command_status) != ESME_ROK)
+      {
+        err_desc = "Binding TRX failed";
+        return -2;
+      } // end if no cool
+
+      // get the smsc name
+      char *alias = buffer + sizeof(cmd_hdr);
+      while (*alias != '\0')
+        ++alias;
+      
+      smsc_name.resize(alias - (buffer + sizeof(cmd_hdr))+1);
+      smsc_name.copy(buffer + sizeof(cmd_hdr), alias - (buffer + sizeof(cmd_hdr)));
+      std::cout << smsc_name << std::endl;
       sms_state = SMS_BOUND_TRX;
-    } break;
+    } return 0;
 
     case submit_sm_resp:
     {
@@ -262,13 +435,67 @@ void Sms::Process_Incoming(char *buffer, const u32 len)
 
     case enquire_link:
     {
-      std::cout << "Link enquiry" << std::endl;
-      if (Enquire_Rsp() < 0);
-        //sms_running = 0;
-    } break;
+      cmd_hdr.sequence_num = phdr->sequence_num;
+      if (Enquire_Rsp() < 0)
+        return -1;
+    } return 0;
 
 
     default:
       std::cout << "Is unimplemented or something ..." << std::endl;
   } // end switch
-} // end Process_Incomming
+
+  return 0;
+  } // end Process_Incomming
+
+
+
+//===============================================================================|
+/**
+ * @brief Returns the current state of the sms
+ * 
+ * @return int one of the enum constants to define each state
+ */
+int Sms::Get_State() const
+{
+  return sms_state;
+} // end Get_State
+
+
+
+//===============================================================================|
+/**
+ * @brief Get's the SMSC system identifier
+ * 
+ * @return std::string the system identifer not more than 16 chars long
+ */
+std::string Sms::Get_SystemID() const
+{
+  return smsc_name;
+} // end std::GetSystemID
+
+
+
+//===============================================================================|
+/**
+ * @brief Retruns the current connectionID or descriptor
+ * 
+ * @return int the descriptor to the socket is returned
+ */
+int Sms::Get_ConnectionID() const
+{
+  return fds;
+} // end Get_ConnectionID
+
+
+
+//===============================================================================|
+/**
+ * @brief Retruns the boolean value to indicate if on debugging mode
+ * 
+ * @return bool debudding cap of sms
+ */
+bool Sms::Get_Debug() const
+{
+  return bdebug;
+} // end Get_Debug

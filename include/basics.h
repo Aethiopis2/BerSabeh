@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <inttypes.h>
+#include <signal.h>
 
 
 #if defined(WINDOWS)
@@ -98,7 +99,7 @@ typedef __int128_t s128;
 #define APP_NAME        "BerSabeh"      // Application name
 
 
-#if __LITTLE_ENDIAN__
+#if __LITTLE_ENDIAN
 #define HTONS(x)        htons(x)
 #define HTONL(x)        htonl(x)
 #define HTONLL(x)       (((u64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))

@@ -15,7 +15,7 @@ INCLUDES = -Iinclude -Iinclude/net
 LIBS = -lpthread
 
 #define the C++ source files
-SRCS = src/errors.cpp src/utils.cpp src/net/tcp-client.cpp src/net/sms.cpp src/bersabeh.cpp 
+SRCS = src/errors.cpp src/utils.cpp src/net/tcp-base.cpp src/net/tcp-client.cpp src/net/sms.cpp src/bersabeh.cpp 
 
 #define the C/C++ object files; replace every occurance of .c in SRCS with .o
 OBJS = $(SRCS:.c=.o)
