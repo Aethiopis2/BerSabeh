@@ -48,17 +48,16 @@
 static void Output_Err(int errno_flag, int level, const char *fmt, va_list ap)
 {
     size_t n;                       // stores string length for buffers
-    const int MAX_LINE = 512;       // the buffer size (a page of memory)
-    char buf[MAX_LINE + 1];     
+    char buf[MAXLINE + 1];     
 
     int saved_errno = errno;        /* save the errno */
 
-    vsnprintf(buf, MAX_LINE, fmt, ap);
+    vsnprintf(buf, MAXLINE, fmt, ap);
     n = strlen(buf);
 
     // test if we have the errno flag set
     if (errno_flag) 
-        snprintf(buf + n, MAX_LINE - n, ": \033[31m%s\033[37m", strerror(saved_errno));
+        snprintf(buf + n, MAXLINE - n, ": \033[31m%s\033[37m", strerror(saved_errno));
     strcat(buf, "\n");      // append a new line
 
     // now are we logging to system log or dumping to standard out
@@ -71,7 +70,7 @@ static void Output_Err(int errno_flag, int level, const char *fmt, va_list ap)
         fflush(stderr);*/
 
         // do it the C++ way
-        std::cerr << "\033[31m\t*** Err: \033[33m" << buf << "\033[37m" << std::endl;
+        std::cerr << "\033[31m\t*** Err \033[37m" << buf << "\033[37m" << std::endl;
     } // end else
 } // end Output_Err
 

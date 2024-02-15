@@ -146,18 +146,18 @@ void Dump_Hex(const char *buf, const size_t len)
 
 //=====================================================================================|
 /**
- * @brief Formats the date and time for displaying on the screen; or dumping into a log
- *  file
+ * @brief Formats the date and time for displaying on the screen; so that my applications
+ *  could have a standard look and feel when run through the console.
  * 
  * @return std::string a formatted datetime
  */
-std::string Display_Time()
+std::string Console_Out(const std::string app_name)
 {
     time_t curr_time;
     char buf[MAXPATH];
 
     std::time(&curr_time);
-    snprintf(buf, MAXPATH, "\033[33m%s\033[37m", APP_NAME);
+    snprintf(buf, MAXPATH, "\033[33m%s\033[37m", app_name.c_str());
     std::strftime(buf + strlen(buf), MAXPATH, " \033[34m%d-%b-%y, %T\033[37m: ", 
         localtime(&curr_time));
 

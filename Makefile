@@ -9,13 +9,14 @@ CC	:= g++
 CFLAGS	:= -Wall -Werror -g
 
 # define any directories containing header files
-INCLUDES = -Iinclude -Iinclude/net
+INCLUDES = -Iinclude -Iinclude/net -Iinclude/db
 
 #define any library path
-LIBS = -lpthread
+LIBS = -lpthread -lodbc
 
 #define the C++ source files
-SRCS = src/errors.cpp src/utils.cpp src/net/tcp-base.cpp src/net/tcp-client.cpp src/net/sms.cpp src/bersabeh.cpp 
+SRCS = src/errors.cpp src/utils.cpp src/net/tcp-base.cpp src/net/tcp-client.cpp \
+	src/net/sms.cpp src/db/iQE.cpp src/db/messages.cpp src/bersabeh.cpp 
 
 #define the C/C++ object files; replace every occurance of .c in SRCS with .o
 OBJS = $(SRCS:.c=.o)

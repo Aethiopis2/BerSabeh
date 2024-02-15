@@ -18,7 +18,7 @@
 //              INCLUDES
 //===============================================================================|
 #include "tcp-client.h"
-
+#include "smpp-konstants.h"
 
 
 
@@ -27,150 +27,6 @@
 //===============================================================================|
 //              MACROS
 //===============================================================================|
-// SMS interface states
-#define SMS_DISCONNECTED    0x00           // interface is in disconnected state
-#define SMS_CONNECTED       0x01           // connected to serivce center through TCP
-#define SMS_BOUND_TRX       0x02           // TCP connected and bound to transiver interface; ready to rock.
-
-
-
-
-
-// SMPP command codes
-#define generic_nack            0x80000000
-#define bind_receiver           0x00000001
-#define bind_receiver_resp      0x80000001
-#define bind_transmitter        0x00000002
-#define bind_transmitter_resp   0x80000002
-#define query_sm                0x00000003
-#define query_sm_resp           0x80000003
-#define submit_sm               0x00000004
-#define submit_sm_resp          0x80000004
-#define deliver_sm              0x00000005
-#define deliver_sm_resp         0x80000005
-#define unbind                  0x00000006
-#define unbind_resp             0x80000006
-#define replace_sm              0x00000007
-#define replace_sm_resp         0x80000007
-#define cancel_sm               0x00000008
-#define cancel_sm_resp          0x80000008
-#define bind_transceiver        0x00000009
-#define bind_transceiver_resp   0x80000009
-#define outbind                 0x0000000B
-#define enquire_link            0x00000015
-#define enquire_link_resp       0x80000015
-
-
-// how bout some few status codes
-#define ESME_ROK                0x00000000      // it's all kool
-#define ESME_RINVMSGLEN         0x00000001      // mesage length is invalid
-#define ESME_RINVCMDLEN         0x00000002      // command length is invalid
-#define ESME_RINVCMDID          0x00000003      // command id is invalid
-#define ESME_RINVBENDSTS        0x00000004      // invalid bind staus for given command
-#define ESME_RSYSERR            0x00000008      // system error
-
-
-
-// TON Type of numbers definitions; applies to addr_ton, soruce_addr_ton, dest_addr_ton, 
-//  esme_addr_ton
-#define TON_UNKOWN              0
-#define TON_INTERNATIONAL       1
-#define TON_NATIONAL            2
-#define TON_NETWORKSPECIFIC     3
-#define TON_SUBSCRIBERNUM       4
-#define TON_ALPHANUM            5
-#define TON_ABBREVIATED         6
-
-
-// NPI; Numeric Plan Indicators; applies to addr_npi, source_addr_npi,
-//  dest_addr_npi, esme_addr_npi
-#define NPI_UNKOWN              0
-#define NPI_ISDN                1       // E163/E164
-#define NPI_DATA                2       // X.121
-#define NPI_TELEX               4       // F.69
-#define NPI_LANDMOBILE          6       // E.212
-#define NPI_NATIONAL            8
-#define NPI_PRIVATE             9
-#define NPI_ERMES               10
-#define NPI_INTERNET            14      // IP
-#define NPI_WAP_CLIENTID        18      // to be defined by WAP Forum
-
-
-
-// command status
-#define ESME_ROK                0x00000000      // No Error
-#define ESME_RINVMSGLEN         0x00000001      // Message Length is invalid
-#define ESME_RINVCMDLEN         0x00000002      // Command Length is invalid
-#define ESME_RINVCMDID          0x00000003      // Invalid Command ID
-#define ESME_RINVBNDSTS         0x00000004      // Incorrect BIND Status for given com-
-#define ESME_RALYBND            0x00000005      // ESME Already in Bound State
-#define ESME_RINVPRTFLG         0x00000006      // Invalid Priority Flag
-#define ESME_RINVREGDLVFLG      0x00000007      // Invalid Registered Delivery Flag
-#define ESME_RSYSERR            0x00000008      // System Error
-#define ESME_RINVSRCADR         0x0000000A      // Invalid Source Address
-#define ESME_RINVDSTADR         0x0000000B      // Invalid Dest Addr
-#define ESME_RINVMSGID          0x0000000C      // Message ID is invalid
-#define ESME_RBINDFAIL          0x0000000D      // Bind Failed
-#define ESME_RINVPASWD          0x0000000E      // Invalid Password
-#define ESME_RINVSYSID          0x0000000F      // Invalid System ID
-#define ESME_RCANCELFAIL        0x00000011      // Cancel SM Failed
-#define ESME_RREPLACEFAIL       0x00000013      // Replace SM Failed
-
-
-
-// service types
-#define ST_NULL                 0               // default
-#define ST_CMT                  "CMT"           // Cellular Message Type
-#define ST_CPT                  "CPT"           // Cellular Paging
-#define ST_VMN                  "VMN"           // Voice Mail Notification
-#define ST_VMA                  "VMA"           // Voice Mail Alerting
-#define ST_WAP                  "WAP"           // Wireless Application Protocol
-#define ST_USSD                 "USSD"          // Unstructured Supplementary Services Data
-
-
-
-// esm classes (these are bits set to mean something on the PDU); these bits
-//  can be combined using bitwise OR (See protocol specs for more)
-#define ESM_DEFAULT             0b00000000      // default store and forward mode
-#define ESM_DATAGRAM            0b00000001      // datagram mode
-#define ESM_FORWARD             0b00000010      // transaction mode (may not be supported)
-#define ESM_DELVIER             0b00001000      // Short Message contains ESME Delivery Acknowledgement
-#define ESM_USR_ACK             0b00010000      // user acknowledgment
-#define ESM_UDHI                0b01000000      // UDHI Indicator (only relevant for MT short messages)
-#define ESM_REP_PATH            0b10000000      // Set Reply Path (only relevant for GSM network)
-
-
-
-// registered deliveries (see protocol specs for more)
-#define REG_DELV_DEFAULT         0b00000000     // No SMSC Delivery Receipt requested (default)
-#define REG_DELV_REQ_RECEIPT     0b00000001     // SMSC Delivery Receipt requested where final delivery
-                                                // outcome is delivery success or failure
-#define REG_DELV_DELV_FRECEIPT   0b00000010     // SMSC Delivery Receipt requested where the final
-                                                // delivery outcome is delivery failure
-#define REG_DELV_RSRVD           0b00000011     // reserved
-
-// SME originated Acknowledgement (bits 3 and 2)
-#define REG_DELV_SME_ACK         0b00000100     // SME Delivery Acknowledgement requested
-#define REG_DELV_SME_USR_ACK     0b00001000     // SME Manual/User Acknowledgment requested
-#define REG_DELV_SME_BOTH        0b00001100     // Both Delivery and Manual/User Acknowledgment requested
-
-// Intermediate Notification (bit 5)
-#define REG_DELV_DELV_INT        0b00010000     // Intermediate notification requested
-
-
-
-// data codings
-#define DATA_CODE_DEFAULT        0b00000000      // default data coding (character encoding)
-
-
-// Optional Paramters (in the native network order)
-#define MESSAGE_PAYLOAD         HTONS(0x0424)
-
-
-
-
-// misc
-#define SMS_VER                 0x34            // smpp version
 
 
 
@@ -199,59 +55,182 @@ typedef struct SMPP_PDU_CMD_HDR
     u32 command_status;         // indicates success or fail state of command
     u32 sequence_num{0};        // the sequence num; defaulted to 0
 } Command_Hdr, *Command_Hdr_Ptr;
-    
+
+
+
+
+/**
+ * @brief This little struct reprsents all the mandatory paramters in 
+ *  SMPP v3.4 as a little option table that can be controlled by users through
+ *  UI's and command interface.
+ * 
+ */
+typedef struct SMPP_MANDATORY_PARAMETERS
+{
+    u8 interface_ver{SMPP_VER};                     // SMPP version (0x34 supported by this driver)
+    u8 service_type{ST_NULL};                       // the service type (see defines above)
+    u8 src_ton{TON_NATIONAL};                       // the type of number (see define above)
+    u8 src_npi{NPI_NATIONAL};                       // the numbering plan indicator
+    u8 dest_ton{TON_NATIONAL};                      // the type of number (see define above)
+    u8 dest_npi{NPI_NATIONAL};                      // the numbering plan indicator
+    u8 esm_class{ESM_DEFAULT};                      // indicates message type and mode (see define above)
+    u8 protocol_id{0};                              // set by SMSC, not generally used
+    u8 priority_flag{1};                            // 4 levels. 0 - 3 lowest to highest. >= 4 reservered
+    std::string schedule_delivery_time{""};         // format YYMMDDhhmmsstnnp (see SMPP specs)
+    std::string validity_period{""};                // expiary date (see SMPP specs on date format)
+    u8 registered_delivery{REG_DELV_REQ_RECEIPT};   // require SMSC recipts or SME reciepts?
+    u8 replace_present{1};                          // 0 don't replace, 1 replace, >=2 reserved
+    u8 data_coding{DATA_CODE_DEFAULT};              // defines the encoding scheme of sms
+    u8 sm_id{0};                                    // indicates the id for canned messages to send (0 for custom)
+} Smpp_Options, *Smpp_Options_Ptr;
+
+
+
+
+/**
+ * @brief This is a structure that is used to keep track of all the active items
+ *  the application needs. By keeping track of sent messages that have not yet been
+ *  confrimed the application has the chance of re-submitting messages or do other
+ *  stuff like change/update or even remove the messages before final arrival.
+ * This litlle struct is used for single messages as distinct from bulk.
+ * 
+ */
+typedef struct SMS_INFO_STRUCT
+{
+    u8 msg_state;           // state of our little message
+    std::string id;         // sms id sent from ESME
+    std::string msg;        // the sent message
+    std::string dst;        // the destination numerics
+    Smpp_Options opts;      // extra options associtated with this message
+} Single_Sms_Info, *Single_Sms_Info_Ptr;
+
+
+
+
+/**
+ * @brief This is the same structure as SMS_INFO_STRUCT. However this has been
+ *  slightly modified to handle bulk messages only. The differences in the two
+ *  structures is only in "dst" feilds, which holds the destination addresses
+ *  for the messages.
+ * This struct implements "dst" as a queued item.
+ * 
+ */
+typedef struct SMS_INFO_STRUCT_BULK
+{
+    u8 msg_state;           // state of message
+    std::string id;         // sms id sent from ESME
+    std::string msg;        // the sent message
+    std::queue<std::string> dst;        // the destination numerics
+    Smpp_Options opts;      // extra options assc
+} Bulk_Sms_Info, *Bulk_Sms_Info_Ptr;
 
 
 
 
 
-class Sms : public TcpClient
+
+
+
+/**
+ * @brief Main Sms class used to handle all comms using SMPPv3.4 Protocol. The class is threaded
+ *  so as to work in async and implement realtime functionalities, i.e. Sms messages trigger
+ *  notifications to the user whenever they are recieved.
+ * 
+ */
+class Sms
 {
 public: 
     Sms();
-    Sms(std::string hostname, std::string port, bool debug=false);
+    Sms(const std::string hostname, const std::string port, const std::string sys_id, 
+        const std::string pwd, const std::string sms_no = "", 
+        const u32 mode = bind_transceiver, const bool hbt = false, 
+        const bool debug = false);
     ~Sms();
 
-    int Bind_Trx(const std::string &sys_id, const std::string &pwd);
+    friend void Heartbeat(Sms *psms);
+    
+    int Startup(const std::string hostname, const std::string port, 
+        const std::string sys_id, const std::string pwd, const std::string sms_no = "",
+        const u32 mode = bind_transceiver,
+        const bool hbeat = false, const bool dbug = false);
+    int Shutdown();
+    int Disconnect();
+
+    
+    int Send_Bulk_Message(const std::string msg, std::list<std::string> &dest_nums,
+        const Smpp_Options_Ptr poptions = nullptr);
+    int Send_Message(const std::string msg, const std::string dest_num, 
+        const Smpp_Options_Ptr poptions = nullptr);
+    int Process_Incoming();
+
+
+    // stright up smpp's
+    int Bind(const u32 command_id);
+    int Bind_Rsp();
+    int Outbind();
     int Unbind();
-    int Unbind_Resp();
+    int Unbind_Resp(const u32 resp = ESME_ROK);
+    int Generic_Nack();
+    int Submit(const std::string &msg, const std::string &dest_num, 
+        const Smpp_Options_Ptr poptions, const u8 can_id = 0);
+    int Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
+        const Smpp_Options_Ptr poptions, const u8 can_id = 0);
+    int Query(const std::string &msg_id, const Smpp_Options_Ptr poptions, 
+        const std::string src_addr = "");
+    int Query_Rsp(const char *buffer, const size_t len);
+    int Cancel(const std::string msg_id, const Smpp_Options_Ptr popts, const std::string src_addr="");
+    int Replace(const std::string msg_id, const Smpp_Options_Ptr popts, 
+        const std::string msg, const std::string src_addr="");
     int Enquire();
-    int Enquire_Rsp();
-    int Submit(std::string msg, std::string dest_num);
-    int Submit_Rsp();
+    int Enquire_Rsp(const u32 resp = ESME_ROK);
+    
+    //int Submit_Rsp(const u32 resp = ESME_ROK);
+    int Deliver_Rsp(const u32 resp = ESME_ROK);
 
 
-    int Process_Incoming(char *buffer, const u32 len);
+    // accessors
+    int Get_Connection() const;
+    void Set_HB_Interval(const u32 interval);
+    u32 Get_HB_Interval() const;
+
     int Get_State() const;
     std::string Get_SystemID() const;
-    int Get_ConnectionID() const;
-    bool Get_Debug() const;
+    std::string Get_Err() const;
+
+
+    void Toggle_Heartbeat();
+    void Toggle_Debug();
 
 private:
 
-    bool bdebug;                // used for dumping hex views
     u8 sms_state;               // state of our little sms
     u32 seq_num;                // the current message sequence #
+    u32 heartbeat_interval;     // determines the interval for heartbeat signal
+
+    char snd_buffer[SMS_BUFFER_SIZE];     // sending buffer
+    char rcv_buffer[SMS_BUFFER_SIZE];     // recieving buffer
+
     std::string err_desc;       // a little error description buffer
-    std::string smsc_name;      // idenitifer for smsc, sent as a result of Bind
+    std::string smsc_id;        // idenitifer for smsc, sent as a result of Bind
 
-    Command_Hdr cmd_hdr;        // sms pdu header instance
+    std::string sms_id;         // the sms number (no more than 21 chars long including null)
+    std::string system_id;      // the user system id
+    std::string pwd;            // the password for authentication
+    
+    TcpClient tcp;              // an object of Tcp for handling the tcp stuff
+    Smpp_Options options;       // options for our little smpp client
+    Command_Hdr cmd_hdr;        // used for sending
+    Command_Hdr cmd_rsp;        // used during reception
+    std::map<u32, Single_Sms_Info> queued_msg;          // messages in queue used for quering stuff
+    std::map<u32, Bulk_Sms_Info> queued_blk_msg;        // same as above, but for bulks
+    
 
-    // pdu body (mandatory) parameters
-    u8 interface_ver;           // SMPP version (0x34 supported by this driver)
-    u8 service_type;            // the service type (see defines above)
-    u8 ton;                     // the type of number (see define above)
-    u8 npi;                     // the numbering plan indicator
-    u8 esm_class;               // indicates message type and mode (see define above)
-    u8 protocol_id;             // set by SMSC, not generally used
-    u8 priority_flag;           // 4 levels. 0 - 3 lowest to highest. >= 4 reservered
-    std::string schedule_delivery_time;     // format YYMMDDhhmmsstnnp (see SMPP specs)
-    std::string validity_period;            // expiary date (see SMPP specs on date format)
-    u8 registered_delivery;                 // require SMSC recipts or SME reciepts?
-    u8 replace_present;          // 0 don't replace, 1 replace, >=2 reserved
-    u8 data_coding;              // defines the encoding scheme of sms
-    u8 sm_id;                    // indicates the id for canned messages to send (0 for custom)
-}; // end namespace
+    bool bdebug;                // used for dumping hex views
+    bool bheartbeat;            // toggles heart beat on/off
+
+    std::thread *phbeat;        // handle to heartbeat thread
+
+}; // end class
 
 
 

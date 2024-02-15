@@ -51,7 +51,7 @@ TcpClient::TcpClient()
  * @param hostname the host name or ip address to connect to
  * @param port the corresponding port number
  */
-TcpClient::TcpClient(std::string hostname, std::string port)
+TcpClient::TcpClient(const std::string &hostname, const std::string &port)
     : paddr{nullptr}
 {
     if (Connect(hostname, port) < 0)
@@ -98,7 +98,6 @@ int TcpClient::Connect(const std::string &hostname, const std::string &port)
         if (connect(fds, p_alias->ai_addr, p_alias->ai_addrlen) == 0)
             return 0;       // success
 
-        TcpClient::Disconnect();
     } while ( (p_alias = p_alias->ai_next) != NULL);
     
     // at the end of the day if socket is null

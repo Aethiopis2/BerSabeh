@@ -43,6 +43,7 @@
 #define APP_SOCK_RECV        1       // is getting some
 
 
+#define LISTENQ             32          // number of allowed listening queues
 
 
 //===============================================================================|

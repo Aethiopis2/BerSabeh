@@ -59,7 +59,7 @@ extern SYS_CONFIG sys_config;              // an instance of system config globa
 int Init_Configuration(const std::string &filename);
 void Dump_Hex(const char *buf, const size_t len);
 std::vector<std::string> Split_String(const std::string &str, const char token);
-std::string Display_Time();
+std::string Console_Out(const std::string app_name);
 
 
 

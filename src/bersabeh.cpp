@@ -15,6 +15,7 @@
 //              INCLUDES
 //===============================================================================|
 #include "sms.h"
+#include "messages.h"
 #include "utils.h"
 #include "errors.h"
 using namespace std;
@@ -24,13 +25,37 @@ using namespace std;
 
 
 //===============================================================================|
+//          TYPES
+//===============================================================================|
+/**
+ * @brief A little structure that organizes different object togther for the app.
+ *  This is so because we don't want different SMS providers or better known as
+ *  SMCS's get into each other's hair. We want to keep each SMCS with it's own
+ *  belonging so that each can do its own task and not worry about the other.
+ * 
+ */
+typedef struct APP_CONTAINER
+{
+    u32 id{0};
+    Sms sms;
+    Messages db;
+
+    std::string host;
+    std::string port;
+    std::string system_id;
+    std::string pwd;
+} AppContainer, *AppContainer_Ptr;
+
+
+
+
+//===============================================================================|
 //              GLOBALS
 //===============================================================================|
 int daemon_proc = 0;
 SYS_CONFIG sys_config;
-Sms sms;
 
-int fds_listen;                 // descriptor for listening  
+std::vector<AppContainer> app_container;     // list of SMS objects
 
 
 
@@ -40,11 +65,12 @@ int fds_listen;                 // descriptor for listening
 //===============================================================================|
 //              PROTOYPES
 //===============================================================================|
-void Signal_Handler(int signum);
+void Print_Title();
+void inline Print(const std::string text);
 void Init_Config(std::string &filename);
-int Init_SMS();
+void Init_SMS();
+void Signal_Handler(int signum);
 void Clean_Up();
-
 
 
 
@@ -54,69 +80,103 @@ void Clean_Up();
 //===============================================================================|
 int main(int argc, char *argv[])
 { 
-    struct sockaddr_in serv;        // address info for listening server
     std::string filename{"config.dat"};
+    int listen_fd{-1};
+    int port{7778};
+    bool brun{true};
+    struct sockaddr_in serv_addr;
 
-
+    std::vector<pollfd> vpoll;
+    pollfd tmppoll;
+    
+    Print_Title();
     Init_Config(filename);
-    if (Init_SMS() < 0)
-        Dump_Err_Exit("%sFailed to connect with SMSC", Display_Time().c_str());
 
-    cout << Display_Time() << "Now initializing web server." << endl;
-    if ( (fds_listen = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        Dump_Err_Exit("%ssocket connection failed.\n", Display_Time().c_str());
-        return 1;
-    } // end if
+    Print("Starting server.");
+    if ( (listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        Dump_Err_Exit("failed to open listening socket");
 
+    u32 on{1};
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0)
+        Dump_Err("failed to set socket options to resuse address");
 
-    iZero(&serv, sizeof(serv));
-    serv.sin_family = AF_INET;
-    serv.sin_port = HTONS(SERV_PORT);
-    serv.sin_addr.s_addr = INADDR_ANY;
+    iZero(&serv_addr, sizeof(serv_addr));
+    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
 
-    if ( bind(fds_listen, (SA *)&serv, sizeof(serv)) < 0)
-    {
-        Dump_Err_Exit("%sfailed to bind socket.\n", Display_Time().c_str());
-        return 1;
-    } // end if no bind
+    if ( bind(listen_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+        Dump_Err_Exit("failed to bind address to listening socket");
 
+    
+    if ( listen(listen_fd, 32) < 0)
+        Dump_Err_Exit("failed to listen");
 
-    if ( listen(fds_listen, LISTENQ) < 0)
-    {
-        Dump_Err_Exit("%sListen failed.\n", Display_Time().c_str());
-        return 1;
-    } // end if no listening
-
-    cout << Display_Time() << "Now running." << endl;
-    bool b = false;
     signal(SIGINT, Signal_Handler);
-    while (1)
+    Print("Now initializing SMS.");
+    Init_SMS();
+
+    iZero(&tmppoll, sizeof(tmppoll));
+    tmppoll.events = POLLIN;
+    tmppoll.fd = listen_fd;
+    vpoll.push_back(tmppoll);
+
+    for ( AppContainer app : app_container)
     {
-        fd_set rset;
-        FD_ZERO(&rset);
+        pollfd t2;
+        iZero(&t2, sizeof(t2));
+        t2.events = POLLIN;
+        t2.fd = app.sms.Get_Connection();
+        vpoll.push_back(t2);
+    } // end for all
 
-        FD_SET(fds_listen, &rset);
-        FD_SET(sms.Get_ConnectionID(), &rset);
-        if ( select(fds_listen + 1, &rset, nullptr, nullptr, nullptr) > 0)
+    Print("Now listening on [*:" + std::to_string(port) + "]");
+    while (brun)
+    {
+        int ret;
+        if ( (ret = POLL(vpoll.data(), vpoll.size())) <= 0)
         {
-            char buffer[MAXLINE];
-            int bytes = recv(sms.Get_ConnectionID(), buffer, MAXLINE, 0);
-            if (bytes < 0)
-                return -1;
+            if (ret < 0)
+                Dump_Err_Exit("poll error");
 
-            sms.Process_Incoming(buffer, bytes);
-            if (!b)
+            brun = false; 
+            break;
+        } // end if not cool
+
+        std::vector<pollfd> tmp{vpoll};
+        for (size_t i = 0; i < tmp.size(); i++)
+        {
+            if (tmp[i].revents == 0 || !(tmp[i].revents & POLLIN))
+                continue;
+
+            // test which of the sms descriptors are ready
+            for (size_t item = 0; item < app_container.size(); item++)
             {
-                if (sms.Submit("Hello Dr. Rediet Worku, this is from PC", "+251909950967") < 0)
-                    Dump_Err_Exit("%sFailed to submit message.", Display_Time().c_str());
-                b = true;
-            } // end if
-        } // end if selecting good
-    } // end while
+                int n;
+                if (tmp[i].fd == app_container[item].sms.Get_Connection())
+                {
+                    if ( ( n = app_container[item].sms.Process_Incoming()) < 0)
+                    {
+                        if (n == -3)
+                        {
+                            Print("SMCS: " + app_container[item].sms.Get_SystemID() + " disconnected.");
+                            int fd = tmp[i].fd;
+                            auto it = std::find_if(vpoll.begin(), vpoll.end(), [&fd](auto &v){ return v.fd == fd; });
+                            if (it != vpoll.end())
+                                vpoll.erase(it);
+                        } // end if
+                        else
+                            Dump_Err_Exit("recv error");
+                    } // end if error
 
-    cout << Display_Time() << "Shutting down." << endl;
-    CLOSE(fds_listen);
+                    break;
+                } // end if among the sms
+            } // end for
+        } // end for
+
+    } // end while forever
+
+    
     return 0;
 } // end main
 
@@ -124,17 +184,28 @@ int main(int argc, char *argv[])
 
 //===============================================================================|
 /**
- * @brief Called whenever POSIX signals interrupt our application; mostly when
- *  terminating the app. In which cases the function does clean up and frees
- *  resources being used.
+ * @brief Prints title; i.e. company name and website info among other things.
  * 
- * @param signum the signal identifier to handle
  */
-void Signal_Handler(int signum)
+void Print_Title()
 {
-    Clean_Up();
-    exit(signum);
-} // end Signal_Handler
+    cout << "\n\t  \033[36mINTAPS Software Engineering\033[37m\n"
+         << "\t\t\033[34mhttp://www.intaps.com\033[037m\n" << endl;
+} // end Print_Ttile
+
+
+
+//===============================================================================|
+/**
+ * @brief Prints the text formatted in a standard manner, so as to give the app
+ *  a standard look and feel.
+ * 
+ * @param text the text/message to print on consle
+ */
+void inline Print(const std::string text)
+{
+    std::cout << Console_Out(APP_NAME) << text << endl;
+} // end Print
 
 
 
@@ -148,38 +219,88 @@ void Signal_Handler(int signum)
  */
 void Init_Config(std::string &filename)
 {
-    // print title
-    cout << "\n\t  \033[36mINTAPS Software Engineering\033[37m\n"
-         << "\t\t\033[34mhttp://www.intaps.com\033[037m\n" << endl;
-
-    cout << Display_Time() << "Reading configuration." << endl;
-
+    Print("Reading configuration.");
     if (Init_Configuration(filename) < 0)
-        Fatal("%s\"%s\" not found.", Display_Time().c_str(), filename.c_str()); 
+        Fatal("configuration file \"%s\" not found.", filename.c_str()); 
 } // end Init_Config
 
 
 
 //===============================================================================|
-int Init_SMS()
+/**
+ * @brief This function connects to all SMCS providers listed in the config file
+ *  by parsing first the semi-colons thus establishing count of sms objects and
+ *  next by parsing the username@password@host:port format supplied in each 
+ *  parameter.
+ * 
+ */
+void Init_SMS()
 {
-    vector<std::string> host = Split_String(sys_config.config["sms_host_address"], ':');
+    int ret;
+    size_t err{0};
+    std::vector<std::string> host_addresses = Split_String(
+            sys_config.config["sms_address"], ';');
 
-    cout << Display_Time() << "Interface binding with SMSC." << endl;
-    std::string sys_id{sys_config.config["sms_system_id"]};
-    std::string pwd{sys_config.config["sms_password"]};
-    
-    if (sms.Connect(host[0], host[1]) < 0)
-        Dump_Err_Exit("%sFailed to network connect.", Display_Time().c_str());
+    for (size_t i{0}; i < host_addresses.size(); i++)
+    {
+        AppContainer app;
 
-    if ( sms.Bind_Trx(sys_id, pwd) < 0)
-        Dump_Err_Exit("%sFailed to bind tranceiver.", Display_Time().c_str());
+        std::vector<std::string> id_pw_host_port = 
+            Split_String(host_addresses[i], '@');
+        
+        if (id_pw_host_port.empty() || id_pw_host_port.size() < 3)
+        {
+            Fatal("invalid value \"%s\" for key \"sms_address\" in configuration file", 
+                host_addresses[i].c_str());
+        } // end if fatal error in config
+        
+        std::vector<std::string> host_port = Split_String(id_pw_host_port[2], ':');
+        if (host_port.empty() || host_port.size() < 2)
+        {
+            Fatal("invalid value \"%s\" for key \"sms_address\" in configuration file", 
+                host_addresses[i].c_str());
+        } // end if fatal error in config
 
-    if (sms.Get_State() == SMS_BOUND_TRX)
-        cout << Display_Time() << "Interface bound as TRX" << endl;
+        // save these for future ref
+        app.id = i + 1;
+        app.host = host_port[0];
+        app.port = host_port[1];
+        app.system_id = id_pw_host_port[0];
+        app.pwd = id_pw_host_port[1];
+        app_container.push_back(app);
 
-    return 0;
+        if ( (ret = app_container[0].sms.Startup(app.host, app.port, app.system_id, app.pwd)) < 0)
+        {
+            if (ret == -2)
+                Fatal(app_container[0].sms.Get_Err().c_str());
+            else
+            {
+                Dump_Err("failed to connect with SMCS #%d at %s:%s", app.id, 
+                    app.host.c_str(), app.port.c_str());
+                ++err;
+            } // end else
+        } // end if
+    } // end for
+
+    if (err == host_addresses.size())
+        Fatal("cannot connect with any SMCS!");
 } // end Init_SMS
+
+
+
+//===============================================================================|
+/**
+ * @brief Called whenever POSIX signals interrupt our application; mostly when
+ *  terminating the app. In which cases the function does clean up and frees
+ *  resources being used.
+ * 
+ * @param signum the signal identifier to handle
+ */
+void Signal_Handler(int signum)
+{
+    std::cout << "\nInterrupted.\nShutting down." << std::endl;
+    exit(signum);
+} // end Signal_Handler
 
 
 
@@ -190,17 +311,5 @@ int Init_SMS()
  */
 void Clean_Up()
 {
-    cout << '\n' << Display_Time() << "Cleaning up." << endl;
-    if (sms.Get_State() == SMS_BOUND_TRX)
-    {
-        sms.Unbind();
-
-        char buf[32]{0};
-        sms.Recv(buf, 32);
-
-        if (sms.Get_Debug())
-            Dump_Hex(buf, 32);
-    } // end if sms_get
-
-    CLOSE(fds_listen);
+    
 } // end Clean_Up

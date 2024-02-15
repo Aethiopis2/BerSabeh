@@ -47,7 +47,7 @@ class TcpClient : public TcpBase
 public:
 
     TcpClient();
-    TcpClient(const std::string hostname, const std::string port);
+    TcpClient(const std::string &hostname, const std::string &port);
     ~TcpClient();
 
     int Connect(const std::string &hostname, const std::string &port);

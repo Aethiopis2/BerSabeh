@@ -68,7 +68,9 @@ int TcpBase::Send(const char *buffer, const size_t len)
 
 //===============================================================================|
 /**
- * @brief retuns a buffer of data from the peer over tcp enabled network
+ * @brief retuns a buffer of data from the peer over tcp enabled network. The 
+ *  function reads until the number of bytes sent is read or EWOULBLOCK error is
+ *  sent by the socket.
  * 
  * @param buffer space to get data from peer
  * @param len length of sent space in bytes
@@ -77,7 +79,25 @@ int TcpBase::Send(const char *buffer, const size_t len)
  */
 int TcpBase::Recv(char *buffer, const size_t len)
 {
-    return recv(fds, buffer, len, 0);
+    size_t total{0};    // the total bytes recieved thus far
+    int n;              // the bytes recieved at one stroke
+
+    do
+    {
+        n = recv(fds, buffer, len, 0);
+        if (n <= 0)
+        {
+            if (n == 0)
+                break;  // socket closed?
+
+            if (errno == EWOULDBLOCK)
+                return -1;
+        } // end if
+        
+        total += n;
+    } while (total < len);
+    
+    return total;
 } // end Recv
 
 

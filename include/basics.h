@@ -34,6 +34,7 @@
 #include <vector>
 #include <stdexcept>
 #include <list>
+#include <queue>
 #include <map>
 #include <unordered_map>
 #include <algorithm>
@@ -48,6 +49,8 @@
 #include <stdarg.h>
 #include <inttypes.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 
 #if defined(WINDOWS)
@@ -98,24 +101,6 @@ typedef __int128_t s128;
 //=====================================================================================|
 #define APP_NAME        "BerSabeh"      // Application name
 
-
-#if __LITTLE_ENDIAN
-#define HTONS(x)        htons(x)
-#define HTONL(x)        htonl(x)
-#define HTONLL(x)       (((u64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
-
-#define NTOHS(x)        ntohs(x)
-#define NTOHL(x)        ntohl(x)
-#define NTOHLL(x)       (((u64)ntol((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
-#else
-#define HTONS(x)        (x)
-#define HTONL(x)        (x)
-#define HTONLL(x)       (x)
-
-#define NTOHS(x)        (x)
-#define NTOHL(x)        (x)
-#define NTOHLL(x)       (x)
-#endif
 
 
 #define iZero(buf, len) memset(buf, 0, len)
