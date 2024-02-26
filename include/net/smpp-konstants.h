@@ -90,7 +90,7 @@
 
 
 
-// command status
+// command status; i.e. SMPP error codes
 #define ESME_ROK                0x00000000      // No Error
 #define ESME_RINVMSGLEN         0x00000001      // Message Length is invalid
 #define ESME_RINVCMDLEN         0x00000002      // Command Length is invalid
@@ -108,6 +108,8 @@
 #define ESME_RINVSYSID          0x0000000F      // Invalid System ID
 #define ESME_RCANCELFAIL        0x00000011      // Cancel SM Failed
 #define ESME_RREPLACEFAIL       0x00000013      // Replace SM Failed
+#define ESME_RSUBMITFAIL        0x00000045      // submit_sm or submit_multi failed
+
 
 
 
@@ -157,6 +159,7 @@
 
 
 // Optional Paramters (in the native network order)
+#define RECIEPTED_MESSAGE_ID    htons(0x001E)
 #define MESSAGE_PAYLOAD         htons(0x0424)
 #define USER_MESSAGE_REFERENCE  htons(0x0204)
 
@@ -192,7 +195,7 @@
 
 // misc
 #define SMPP_VER                0x34            // smpp version
-#define HEARTBEAT_INTERVAL      10              // default heartbeat, every 10 mins or so
+#define HEARTBEAT_INTERVAL      5              // default heartbeat, every 10 mins or so
 #define SMS_BUFFER_SIZE         96000           // buffer size for incoming connection 
 
 

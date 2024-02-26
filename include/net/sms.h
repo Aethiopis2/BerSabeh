@@ -27,7 +27,8 @@
 //===============================================================================|
 //              MACROS
 //===============================================================================|
-
+extern void Print(const std::string);
+extern void Update_Out_SMS_DB(const std::string msg_id, const u8 status);
 
 
 
@@ -129,6 +130,22 @@ typedef struct SMS_INFO_STRUCT_BULK
 
 
 
+/**
+ * @brief A structure used to hold temporary info on messages that are being recieved 
+ *  in our system.
+ * 
+ */
+typedef struct DELIVER_QUEUE
+{
+    std::string phone;      // the source phone no
+    std::string msg;        // the message 
+    u8 type{0};             // 0 - new message, 1 - Incorrect, 2 - Entry Pending, 3 - done
+} DeliverQueue, *DeliverQueue_Ptr;
+
+
+
+
+
 
 
 /**
@@ -161,12 +178,11 @@ public:
         const Smpp_Options_Ptr poptions = nullptr);
     int Send_Message(const std::string msg, const std::string dest_num, 
         const Smpp_Options_Ptr poptions = nullptr);
-    int Process_Incoming();
+    int Process_Incoming(char *err, const size_t buf_len = MAXLINE);
 
 
     // stright up smpp's
     int Bind(const u32 command_id);
-    int Bind_Rsp();
     int Outbind();
     int Unbind();
     int Unbind_Resp(const u32 resp = ESME_ROK);
@@ -177,15 +193,21 @@ public:
         const Smpp_Options_Ptr poptions, const u8 can_id = 0);
     int Query(const std::string &msg_id, const Smpp_Options_Ptr poptions, 
         const std::string src_addr = "");
-    int Query_Rsp(const char *buffer, const size_t len);
+    
     int Cancel(const std::string msg_id, const Smpp_Options_Ptr popts, const std::string src_addr="");
     int Replace(const std::string msg_id, const Smpp_Options_Ptr popts, 
         const std::string msg, const std::string src_addr="");
     int Enquire();
     int Enquire_Rsp(const u32 resp = ESME_ROK);
-    
     //int Submit_Rsp(const u32 resp = ESME_ROK);
     int Deliver_Rsp(const u32 resp = ESME_ROK);
+
+
+    int Handle_Bind(char *err, const size_t buf_len);
+    int Handle_Unbind(char *err, const size_t buf_len);
+    int Handle_Submit(char *err, const size_t buf_len);
+    int Handle_Deliver(char *err, const size_t buf_len, std::string &phone_no);
+    int Handle_Query(char *err, const size_t buf_len);
 
 
     // accessors
@@ -207,10 +229,6 @@ private:
     u32 seq_num;                // the current message sequence #
     u32 heartbeat_interval;     // determines the interval for heartbeat signal
 
-    char snd_buffer[SMS_BUFFER_SIZE];     // sending buffer
-    char rcv_buffer[SMS_BUFFER_SIZE];     // recieving buffer
-
-    std::string err_desc;       // a little error description buffer
     std::string smsc_id;        // idenitifer for smsc, sent as a result of Bind
 
     std::string sms_id;         // the sms number (no more than 21 chars long including null)
@@ -223,6 +241,7 @@ private:
     Command_Hdr cmd_rsp;        // used during reception
     std::map<u32, Single_Sms_Info> queued_msg;          // messages in queue used for quering stuff
     std::map<u32, Bulk_Sms_Info> queued_blk_msg;        // same as above, but for bulks
+    std::map<std::string, DeliverQueue> deliver_queue;  // queue for delivery state
     
 
     bool bdebug;                // used for dumping hex views
@@ -230,6 +249,10 @@ private:
 
     std::thread *phbeat;        // handle to heartbeat thread
 
+    char snd_buffer[SMS_BUFFER_SIZE];     // sending buffer
+    char rcv_buffer[SMS_BUFFER_SIZE];     // recieving buffer
+    char err_desc[MAXLINE];               // buffer to store app specific errors
+    
 }; // end class
 
 

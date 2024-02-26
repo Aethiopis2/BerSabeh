@@ -79,25 +79,15 @@ int TcpBase::Send(const char *buffer, const size_t len)
  */
 int TcpBase::Recv(char *buffer, const size_t len)
 {
-    size_t total{0};    // the total bytes recieved thus far
     int n;              // the bytes recieved at one stroke
 
-    do
+    if ( (n = recv(fds, buffer, len, MSG_WAITALL)) <= 0)
     {
-        n = recv(fds, buffer, len, 0);
-        if (n <= 0)
-        {
-            if (n == 0)
-                break;  // socket closed?
+        if (errno != EWOULDBLOCK)
+            return -1;
+    } // end if
 
-            if (errno == EWOULDBLOCK)
-                return -1;
-        } // end if
-        
-        total += n;
-    } while (total < len);
-    
-    return total;
+    return n;
 } // end Recv
 
 

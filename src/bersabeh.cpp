@@ -38,13 +38,31 @@ typedef struct APP_CONTAINER
 {
     u32 id{0};
     Sms sms;
-    Messages db;
 
     std::string host;
     std::string port;
     std::string system_id;
     std::string pwd;
 } AppContainer, *AppContainer_Ptr;
+
+
+
+
+typedef struct SESSION_TAG
+{
+    int fd;
+    std::string ip;
+    std::string port;
+    int header_full;
+    int body_full;
+    int header_len;
+    int body_len;
+    int total;
+
+    char buf[MAXLINE];
+} Session, *Session_Ptr;
+
+
 
 
 
@@ -56,7 +74,13 @@ int daemon_proc = 0;
 SYS_CONFIG sys_config;
 
 std::vector<AppContainer> app_container;     // list of SMS objects
+std::map<int, Session> session;              // session object mapped to its socket
+std::vector<SmsOut> db_messages;             // queue of db messages
 
+Messages db;
+bool sender_running{false};
+std::mutex _mutex;
+double msg_per_second{20.0 / (double)1'000};
 
 
 
@@ -70,6 +94,18 @@ void inline Print(const std::string text);
 void Init_Config(std::string &filename);
 void Init_SMS();
 void Signal_Handler(int signum);
+
+
+int Get_Http_Request(Session_Ptr psession);
+int Parse_Header(char *buf);
+std::string Parse_Json_String(const char *buf, const std::string &key);
+int Parse_Json_Int(const char *buf, const std::string &key, int &value);
+
+
+void Http_Ok(const int sockfd);
+void Http_Error(const int sockfd, const int err_code);
+
+void Sender_Thread(Sms *psms);
 void Clean_Up();
 
 
@@ -89,8 +125,28 @@ int main(int argc, char *argv[])
     std::vector<pollfd> vpoll;
     pollfd tmppoll;
     
+
     Print_Title();
     Init_Config(filename);
+
+    // connect to database, where-ever that may be.
+    Print("Connecting to database.");
+    if (db.Connect_DB(sys_config.config["db_connection"]) < 0)
+    {
+        iQE::Dump_DB_Error();
+        return -1;
+    } // end if
+
+    Print("Loading outgoing SMS from database.");
+    db.Load_AID();
+    db.Load_Current_Period();
+    db.Load_Current_Period_Name();
+    db.Load_SMS_Bill_Format();
+    Print(db.Load_Unread_Format());
+    db_messages = db.Load_Messages();
+    //Print(std::to_string(db.Load_Reading_Period()));
+    //db_messages = db.Preview_Bill_SMS();
+    //db.Write_SMSOut(db_messages);
 
     Print("Starting server.");
     if ( (listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -121,18 +177,22 @@ int main(int argc, char *argv[])
     tmppoll.fd = listen_fd;
     vpoll.push_back(tmppoll);
 
-    for ( AppContainer app : app_container)
+    for ( size_t i{0}; i < app_container.size(); i++)
     {
         pollfd t2;
         iZero(&t2, sizeof(t2));
         t2.events = POLLIN;
-        t2.fd = app.sms.Get_Connection();
+        t2.fd = app_container[i].sms.Get_Connection();
         vpoll.push_back(t2);
     } // end for all
 
+
+    
     Print("Now listening on [*:" + std::to_string(port) + "]");
+    //int x{0};
     while (brun)
     {
+        //app_container[0].sms.Enquire();
         int ret;
         if ( (ret = POLL(vpoll.data(), vpoll.size())) <= 0)
         {
@@ -149,29 +209,100 @@ int main(int argc, char *argv[])
             if (tmp[i].revents == 0 || !(tmp[i].revents & POLLIN))
                 continue;
 
-            // test which of the sms descriptors are ready
-            for (size_t item = 0; item < app_container.size(); item++)
+            if (tmp[i].fd == listen_fd)
             {
-                int n;
-                if (tmp[i].fd == app_container[item].sms.Get_Connection())
-                {
-                    if ( ( n = app_container[item].sms.Process_Incoming()) < 0)
-                    {
-                        if (n == -3)
-                        {
-                            Print("SMCS: " + app_container[item].sms.Get_SystemID() + " disconnected.");
-                            int fd = tmp[i].fd;
-                            auto it = std::find_if(vpoll.begin(), vpoll.end(), [&fd](auto &v){ return v.fd == fd; });
-                            if (it != vpoll.end())
-                                vpoll.erase(it);
-                        } // end if
-                        else
-                            Dump_Err_Exit("recv error");
-                    } // end if error
+                // this is the listening socket, accept an incoming conn
+                sockaddr_in addr;
+                socklen_t addr_len = sizeof(sockaddr_in);
+                char ip[INET_ADDRSTRLEN];
 
-                    break;
-                } // end if among the sms
-            } // end for
+                int clifd = accept(listen_fd, (sockaddr*)&addr, &addr_len);
+                if (clifd < 0)
+                    Dump_Err("Accept error");
+
+
+                if (!inet_ntop(AF_INET, &addr.sin_addr, ip, INET_ADDRSTRLEN))
+                    Dump_Err("Converting address to human notation.");
+
+                Session s{clifd, ip, std::to_string(ntohs(addr.sin_port)), 0, 0, 0, 0, 0};
+                session.emplace(clifd, s);
+
+                pollfd t;
+                iZero(&t, sizeof(t));
+                t.events = POLLIN;
+                t.fd = clifd;
+                vpoll.push_back(t);
+
+                Print("New connection from " + s.ip + ":" + s.port);
+            } // end if listening socket
+            else 
+            {
+                bool issms{false};
+
+                // test which of the sms descriptors are ready
+                for (size_t item = 0; item < app_container.size(); item++)
+                {
+                    int n;
+                    if (tmp[i].fd == app_container[item].sms.Get_Connection())
+                    {
+                        char b[MAXLINE];
+                        if ( ( n = app_container[item].sms.Process_Incoming(b)) < 0)
+                        {
+                            if (n < 0)
+                            {
+                                if (n == -2)
+                                    Print(b);
+                                else
+                                   Dump_Err("Disconnected");
+                                // int fd = tmp[i].fd;
+                                // auto it = std::find_if(vpoll.begin(), vpoll.end(), [&fd](auto &v){ return v.fd == fd; });
+                                // if (it != vpoll.end())
+                                //     vpoll.erase(it);
+                                //Dump_Err_Exit("recv error");
+                            } // end if
+                        } // end if error
+    
+                        issms = true;
+                        // if (x++ < 1)
+                        //     for (size_t k{0}; k < db_messages.size(); k++)
+                        //     {
+                        //         app_container[0].sms.Send_Message(db_messages[k].message, db_messages[k].phoneno);
+                        //         if (k+1 % 10 == 0)
+                        //             break;
+                        //     } // end if
+                        break;
+                    } // end if among the sms
+                } // end for
+
+                if (!issms)
+                {
+                    // the ready descriptor by odd one out is a web request over http
+                    if (!Get_Http_Request(&session[tmp[i].fd]))
+                    {
+                        char *buf = session[tmp[i].fd].buf;
+                        int sockfd = tmp[i].fd;
+
+                        Print(buf);   
+                        //Print("Send Type = " + std::to_string(Parse_SendType(session[tmp[i].fd].buf)));
+                        //Print("SubscriberID = " + std::to_string(Parse_SubscriberID(session[tmp[i].fd].buf)));
+                        //Print("Message Format = " + Parse_Message_Format(session[tmp[i].fd].buf));
+                        //Print("Phone No = " + Parse_PhoneNo(session[tmp[i].fd].buf));
+                        
+                        if (Parse_Header(buf) < 0)
+                            Http_Error(sockfd, 504);
+                        else
+                            Http_Ok(sockfd);
+
+                        auto it = std::find_if(vpoll.begin(), vpoll.end(), 
+                            [&sockfd](auto &v){ return v.fd == sockfd; });
+
+                        if (it != vpoll.end())
+                            vpoll.erase(it);
+
+                        CLOSE(sockfd);
+                    } // end if 
+                } // end if not sms
+            } // end else either sms or http
         } // end for
 
     } // end while forever
@@ -269,10 +400,10 @@ void Init_SMS()
         app.pwd = id_pw_host_port[1];
         app_container.push_back(app);
 
-        if ( (ret = app_container[0].sms.Startup(app.host, app.port, app.system_id, app.pwd)) < 0)
+        if ( (ret = app_container[i].sms.Startup(app.host, app.port, app.system_id, app.pwd)) < 0)
         {
             if (ret == -2)
-                Fatal(app_container[0].sms.Get_Err().c_str());
+                Fatal(app_container[i].sms.Get_Err().c_str());
             else
             {
                 Dump_Err("failed to connect with SMCS #%d at %s:%s", app.id, 
@@ -299,8 +430,238 @@ void Init_SMS()
 void Signal_Handler(int signum)
 {
     std::cout << "\nInterrupted.\nShutting down." << std::endl;
-    exit(signum);
+    app_container[0].sms.Shutdown();
+    iQE::Shutdown_ODBC();
+    exit(1);
 } // end Signal_Handler
+
+
+
+//===============================================================================|
+int Get_Http_Request(Session_Ptr psession)
+{
+    char *ptr;
+    int n = recv(psession->fd, psession->buf + psession->total, MAXLINE - psession->total, 0);
+    if (n < 0)
+        return -1;
+
+    psession->total += n;
+    if (!psession->header_full)
+    {
+        // processing header bytes
+        // locate the special header dilimeters within the buffer
+        ptr = strstr(psession->buf, "\r\n\r\n");
+        if (!ptr)
+            return 1;   // not done yet
+
+        psession->header_full = 1;
+        psession->header_len = (ptr + 4) - psession->buf;
+    } // end if
+
+    if (psession->header_full && !psession->body_full)
+    {
+        // locate the content length from the header buffer
+        ptr = strstr(psession->buf, "Content-Length:");
+        if (!ptr)
+            return -2;      // invalid request
+
+        ptr += strlen("Content-Length:") + 1;
+        char *ptr2 = strstr(ptr, "\r\n");
+        int digits = ptr2 - ptr;
+        char l[12];
+        strncpy(l, ptr, digits);
+        psession->body_len = atoi(l);
+        if (psession->body_len >= (psession->total))
+            return 1;
+
+        psession->body_full = 1;
+    } // end if body validation
+
+    if (psession->header_full && psession->body_full)
+        psession->header_full = psession->body_full = psession->total =  0;
+    
+    return 0;
+} // end Handle_HTTP
+
+
+
+//===============================================================================|
+int Parse_Header(char *buf)
+{
+    char *ptr = strstr(buf, "POST");
+    if (!ptr)
+        return -1;      // protocol not accepted
+
+    ptr += strlen("POST");
+    char *ptr2 = strstr(ptr, "/sendSMS");
+    if (!ptr2)
+        return -2;      // a 404 page not found
+
+    return 0;
+} // end Parse_Header
+
+
+
+//===============================================================================|
+/**
+ * @brief This function parses the value part of a string from a Json encoded
+ *  stream or buffer given it's key. The value to be parsed must adhere to strict
+ *  Json regulation, alas the function will fail to parse.
+ * 
+ * @param buf buffer containing Json data to parse
+ * @param key the key to parse the value for
+ * 
+ * @return std::string a prased Json string for C++ to use. Alas a null string.
+ */
+std::string Parse_Json_String(const char *buf, const std::string &key)
+{
+    const char *ptr = strstr(buf, key.c_str());
+    if (!ptr)
+        return "";      // key not found.
+
+    ptr += key.length();
+
+    // locate ':' speartor in Json format
+    const char *ptr2 = strchr(ptr, ':');
+    if (!ptr2)
+        return "";      // Json error
+             
+    ptr = strchr(ptr2, '\"');
+    if (!ptr)
+        return "";
+
+    ++ptr;              // the 1st char in string data
+
+    // from the first char, locate the last, quote(")
+    ptr2 = strchr(ptr, '\"');
+    if (!ptr2)
+        return "";
+
+    --ptr2;             // the last char in string
+
+    std::string ret{ptr, (size_t)(ptr2 - ptr)};
+    return ret;
+} // end Parse_Json_String
+
+
+
+//===============================================================================|
+/**
+ * @brief Parses the integer value from Json formatted stream or buffer. The 
+ *  function assumes the caller already knows the parsed value is an integer.
+ * 
+ * @param buf the buffer to parse
+ * @param key the ky who's value are we looking for
+ * @param value the parsed integer value is retured here
+ * 
+ * @return int 0 on success alas -1.
+ */
+int Parse_Json_Int(const char *buf, const std::string &key, int &value)
+{
+    const char *ptr = strstr(buf, key.c_str());
+    if (!ptr)
+        return -1;
+
+    ptr += key.length();
+    const char *ptr2 = strchr(ptr, ':');
+    if (!ptr2)
+        return -1;
+
+    // skip over any white space and stuff ...
+    ++ptr2;
+    while (*ptr2 == ' ' || *ptr2 == '\t' || *ptr2 == '\n')
+        ++ptr2;
+    
+    // now we at the first digit, now the ticky part, locate the last portion
+    // it's separted by comma (,) or closed with left brace (}).
+    ptr = strchr(ptr2, ',');
+    if (!ptr)
+    {
+        ptr = strchr(ptr2, '}');
+        if (!ptr)
+            return -1;
+    } // end if not found
+
+
+    // let's apply a hack, copy into a string then convert string
+    //  since our pointer won't null terminate.
+    std::string s{ptr2, (size_t)(ptr - ptr2)};
+    value = atoi(s.c_str());
+
+    return 0;
+} // end Parse_Json_Int
+
+
+
+//===============================================================================|
+/**
+ * @brief Send's a very simple kooked http ok response along side some rudimentary
+ *  HTML incase this is on the web.
+ * 
+ * @param sockfd the connection descriptior
+ */
+void Http_Ok(const int sockfd)
+{
+    char b[MAXLINE]{0};
+    snprintf(b, MAXLINE, "HTTP/1.1 200 Success\r\nConnection: Close\r\n\
+    Content-Type:text/html\r\n\r\n\
+    <html><head><title>Bersabeh OK</title></head><body>Bersabeh Ok response\
+    </body></html>\r\n");
+
+    if (send(sockfd, b, strlen(b), 0) < 0)
+        Dump_Err("Sending OK response.");
+} // end Http_Ok
+
+
+
+//===============================================================================|
+/**
+ * @brief Send's a canned error response given the code as param.
+ * 
+ * @param sockfd the socket descriptor
+ * @param err_code a code describing the http error
+ */
+void Http_Error(const int sockfd, const int err_code)
+{
+    char b[MAXLINE]{0};
+    snprintf(b, MAXLINE, "HTTP/1.1 %d Error Occurred\r\n\r\n", err_code);
+
+    if (send(sockfd, b, strlen(b), 0) < 0)
+        Dump_Err("Sending Error response.");
+} // end Http_Error
+
+
+
+//===============================================================================|
+void Sender_Thread(Sms *psms)
+{
+    std::chrono::duration<double>  time_span;
+    while (!db_messages.empty())
+    {
+        std::chrono::high_resolution_clock::time_point start_t = 
+            std::chrono::high_resolution_clock::now();
+
+        SmsOut out = db_messages.back();
+
+        if (psms->Send_Message(out.message, out.phoneno) < 0)
+            Dump_Err("Sending fail.");
+
+        db.Update_SMSOut(&out);
+
+        _mutex.lock();
+        db_messages.pop_back();
+        _mutex.unlock();
+
+        do
+        {
+            std::chrono::high_resolution_clock::time_point end_t = 
+                std::chrono::high_resolution_clock::now();
+
+            time_span = std::chrono::duration_cast<std::chrono::duration<double>>(end_t - start_t);
+        } while (time_span.count() <= msg_per_second );
+        
+    } // end while sending
+} // end Sender_Thread
 
 
 

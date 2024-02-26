@@ -54,10 +54,29 @@
 
 
 
+#define CPY_OPTIONS(opt, popt) { \
+    opt.interface_ver = popt->interface_ver; \
+    opt.service_type = popt->service_type; \
+    opt.src_ton = popt->src_ton; \
+    opt.src_npi = popt->src_npi; \
+    opt.dest_ton = popt->dest_ton; \
+    opt.dest_npi = popt->dest_npi; \
+    opt.esm_class = popt->esm_class; \
+    opt.protocol_id = popt->protocol_id; \
+    opt.priority_flag = popt->priority_flag; \
+    opt.schedule_delivery_time = popt->schedule_delivery_time; \
+    opt.validity_period = popt->validity_period; \
+    opt.registered_delivery = popt->registered_delivery; \
+    opt.replace_present = popt->replace_present; \
+    opt.data_coding = popt->data_coding; \
+    opt.sm_id = popt->sm_id; \
+}
+
+
+
 //===============================================================================|
 //        GLOBALS
 //===============================================================================|
-void Run(Sms *psms);
 void Heartbeat(Sms *psms);
 
 
@@ -84,12 +103,12 @@ Sms::Sms()
     bdebug = false;
 
     smsc_id = "";
-    err_desc = "";
     system_id = "";
     pwd = "";
 
     iZero(snd_buffer, SMS_BUFFER_SIZE);
     iZero(rcv_buffer, SMS_BUFFER_SIZE);
+    iZero(err_desc, MAXLINE);
 } // end Constructor
 
 
@@ -123,10 +142,10 @@ Sms::Sms(const std::string hostname, const std::string port, const std::string s
     bdebug = debug;
 
     smsc_id = "";
-    err_desc = "";
     
     iZero(snd_buffer, SMS_BUFFER_SIZE);
     iZero(rcv_buffer, SMS_BUFFER_SIZE);
+    iZero(err_desc, MAXLINE);
 
     if (Startup(hostname, port, sys_id, pwd, sms_no, mode, hbt, debug) < 0)
         throw std::runtime_error(strerror(errno));
@@ -175,6 +194,10 @@ int Sms::Startup(const std::string hostname, const std::string port,
     if ( (ret = tcp.Connect(hostname, port)) < 0)
         return ret;
 
+    u32 on{1};
+    if (ioctl(tcp.Get_Socket(), FIONBIO, (char *)&on) < 0)
+        return -1;
+
     sms_state = SMS_CONNECTED;
     this->system_id = sys_id;
     this->pwd = pwd;
@@ -184,9 +207,6 @@ int Sms::Startup(const std::string hostname, const std::string port,
         return ret;
     
     bheartbeat = hbeat;
-    if (bheartbeat)
-        phbeat = new std::thread(Heartbeat, this);
-    
     return 0;
 } // end Startup
 
@@ -226,7 +246,7 @@ int Sms::Disconnect()
 {
     if (!(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if bounded not
 
@@ -272,7 +292,7 @@ int Sms::Send_Message(const std::string msg, const std::string dest_num,
         return 0;
     } // end if
 
-    err_desc = "Not authorized. Please Bind interface first.";
+    snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
     return -2;
 } // end Send_Message
 
@@ -301,7 +321,7 @@ int Sms::Send_Bulk_Message(const std::string msg, std::list<std::string> &dest_n
     {
         if (s.length() > 20)
         {
-            err_desc = "Invalid length. Destination number can not exceed 20 characters.";
+            snprintf(err_desc, MAXLINE, "Invalid length. Number %s is too long.", s.c_str());
             return -2;
         } // end if dest num
 
@@ -326,7 +346,7 @@ int Sms::Send_Bulk_Message(const std::string msg, std::list<std::string> &dest_n
         return 0;
     } // end if bounded
 
-    err_desc = "Not authorized. Bind interface first.";
+    snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
     return -2;
 } // end Send_Bulk_Message
 
@@ -411,6 +431,7 @@ std::string Sms::Get_SystemID() const
  */
 std::string Sms::Get_Err() const
 {
+    std::cout << err_desc << std::endl;
     return err_desc;
 } // end Get_ConnectionID
 
@@ -466,7 +487,7 @@ int Sms::Bind(const u32 command_id)
 {
     if ( !(sms_state & SMS_CONNECTED))
     {
-        err_desc = "Network not connected.";
+        snprintf(err_desc, MAXLINE, "Interface is not connected to a network.");
         return -2;
     } // end if not connected
     
@@ -474,7 +495,7 @@ int Sms::Bind(const u32 command_id)
 
     if (system_id.length() > 15 || pwd.length() > 8)
     {
-        err_desc = "System id and/or password is too long.";
+        snprintf(err_desc, MAXLINE, "System id and/or password is too long.");
         return -2;
     } // end if no good length
 
@@ -510,42 +531,6 @@ int Sms::Bind(const u32 command_id)
 
 //===============================================================================|
 /**
- * @brief Handles the bind_resp signal sent from SMCS.
- * 
- * @return int 0 on success, -ve on fail. 
- */
-int Sms::Bind_Rsp()
-{
-    if (cmd_rsp.command_status != ESME_ROK)
-    {
-        if (cmd_rsp.command_status == ESME_RINVCMDID)
-        {
-            err_desc = "Bind Transceiver not supported.";
-            int ret;
-            if ( (ret = Bind(bind_transmitter)) < 0)
-                return ret;
-        } // end if bind trx fail
-        else 
-        {
-            char buf[100];
-            snprintf(buf, 100, "Bind failed with error code = 0x%X", cmd_rsp.command_status);
-            err_desc = buf;
-            return -2;
-        } // end else bind fail for other reason
-    } // end if status not ok
-
-    sms_state |= SMS_BOUNDED;
-    smsc_id = rcv_buffer;
-
-    // igonre TLV if any
-
-    return 0;
-} // end Bind_Rsp
-
-
-
-//===============================================================================|
-/**
  * @brief This message is sent from SMCS to an ESME to generate a bind_receiver
  *  signal. This is probably sent when ESME is connected as transmitter only.
  * 
@@ -573,7 +558,7 @@ int Sms::Unbind()
 {
     if ( !(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Interface not bound.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if
     
@@ -601,7 +586,7 @@ int Sms::Unbind_Resp(const u32 resp)
 {
     if ( !(sms_state & SMS_CONNECTED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if not connected
     
@@ -657,13 +642,13 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
 {
     if ( !(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if not bounded
 
     if (dest_num.length() > 20)
     {
-        err_desc = "Buffer overflow. Destination number exceeds count.";
+        snprintf(err_desc, MAXLINE, "Buffer overflow. Destination number exceeds space.");
         return -2;
     } // end if dest num
 
@@ -701,7 +686,7 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
     {
         if (poptions->schedule_delivery_time.length() > 16)
         {
-            err_desc = "Invaild time format in delivery time.";
+            snprintf(err_desc, MAXLINE, "Invalid time format in delivery time");
             return -2;
         } // end if bad newz
 
@@ -717,7 +702,7 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
     {
         if (poptions->validity_period.length() > 16)
         {
-            err_desc = "Invaild time format in validity period.";
+            snprintf(err_desc, MAXLINE, "Invalid time format in validty period.");
             return -2;
         } // end if bad newz
 
@@ -735,11 +720,11 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
     // skip these if we are processing canned messages
     if (can_id == 0)
     {
-        u32 len = msg.length();
+        u32 len = msg.length() + 1;
         if (len < 255)
         {
             iCpy(alias++, (u8*)&len, sizeof(u8));
-            iCpy(alias, msg.c_str(), len);
+            iCpy(alias, msg.c_str(), len - 1);
             alias += len;
             *alias = 0x0;
         } // end if message less than 255 chars long
@@ -749,14 +734,14 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
             *alias = 0x0;
             *alias = 0x0;
 
-            // trim the message if it exceeds unreasonably
+            // send large messages as TLV data
             u16 param = MESSAGE_PAYLOAD;
             iCpy(alias, &param, sizeof(u16));   // the parameter
-            alias += 2;
-            u32 l = htonl(l);
-            iCpy(alias, &l, sizeof(u16));     // the length
-            alias += 2;
-            iCpy(alias, msg.c_str(), len);      // the value
+            alias += sizeof(16);
+            param = htons(len);
+            iCpy(alias, &param, sizeof(u16));   // the length
+            alias += sizeof(u16);
+            iCpy(alias, msg.c_str(), len - 1);  // the value
             alias += (len);
             *alias++ = 0x0;
         } // end else long message
@@ -773,25 +758,22 @@ int Sms::Submit(const std::string &msg, const std::string &dest_num,
     u16 param = USER_MESSAGE_REFERENCE;
     iCpy(alias, &param, sizeof(u16));
     alias += sizeof(u16);
-    param = sizeof(u16);
+    param = htons(sizeof(u16));
     iCpy(alias, &param, sizeof(u16));
     alias += sizeof(u16);
-    iCpy(alias, &seq_num, sizeof(u16));
+    param = htons(++seq_num);
+    iCpy(alias, &param, sizeof(u16));
     alias += sizeof(u16);
 
-    SET_PDU_HEADR(cmd_hdr, alias - snd_buffer, submit_sm, 0, ++seq_num);
+    SET_PDU_HEADR(cmd_hdr, alias - snd_buffer, submit_sm, 0, seq_num);
     iCpy(snd_buffer, &cmd_hdr, sizeof(cmd_hdr));
 
     if ( tcp.Send(snd_buffer, alias - snd_buffer) < 0)
-    {
-        err_desc = strerror(errno);
         return -1;
-    } // end if
 
     Single_Sms_Info info{MSG_STATE_SENT, "", msg, dest_num};
-    // iCpy(&info.opts, poptions, 13 + poptions->schedule_delivery_time.length() + 
-    //     poptions->validity_period.length());
-    queued_msg.emplace(cmd_hdr.sequence_num, info);
+    CPY_OPTIONS(info.opts, poptions);
+    queued_msg.emplace(ntohl(cmd_hdr.sequence_num), info);
 
     if (bdebug)
       Dump_Hex(snd_buffer, alias - snd_buffer);
@@ -881,7 +863,7 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
             {
                 if (poptions->schedule_delivery_time.length() > 16)
                 {
-                    err_desc = "Invaild time format in delivery time.";
+                    snprintf(err_desc, MAXLINE, "Invalid time format in delivery time.");
                     return -2;
                 } // end if bad newz
 
@@ -896,7 +878,7 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
             {
                 if (poptions->validity_period.length() > 16)
                 {
-                    err_desc = "Invaild time format in validity period.";
+                    snprintf(err_desc, MAXLINE, "Invalid time format in validity period");
                     return -2;
                 } // end if bad newz
 
@@ -913,11 +895,11 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
             // skip these if we are processing canned messages
             if (can_id == 0)
             {
-                u16 msg_len = (u16)msg.length();
+                u16 msg_len = (u16)msg.length() + 1;
                 if (msg_len < 255)
                 {
                     iCpy(alias++, (u8*)&msg_len, sizeof(u8));
-                    iCpy(alias, msg.c_str(), msg_len);
+                    iCpy(alias, msg.c_str(), msg_len - 1);
                     alias += (msg_len + 1);
                 } // end if message less than 255 chars long
                 else 
@@ -928,11 +910,11 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
                     // trim the message if it exceeds unreasonably
                     u16 param = MESSAGE_PAYLOAD;
                     iCpy(alias, &param, sizeof(u16));   // the parameter
-                    alias += 2;
-                    u16 l = htons(msg_len);
-                    iCpy(alias, &l, sizeof(u16)); // the length
-                    alias += 2;
-                    iCpy(alias, msg.c_str(), msg_len);  // the value
+                    alias += sizeof(u16);
+                    param = htons(msg_len);
+                    iCpy(alias, &param, sizeof(u16)); // the length
+                    alias += sizeof(u16);
+                    iCpy(alias, msg.c_str(), msg_len - 1);  // the value
                     alias += (msg_len + 1);
                 } // end else long message
             } // end if not canned
@@ -950,22 +932,19 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
             param = sizeof(u16);
             iCpy(alias, &param, sizeof(u16));
             alias += sizeof(u16);
-            iCpy(alias, &seq_num, sizeof(u16));
+            param = htons(++seq_num);
+            iCpy(alias, &param, sizeof(u16));
             alias += sizeof(u16);
 
-            SET_PDU_HEADR(cmd_hdr, alias - snd_buffer, submit_multi, 0, ++seq_num);
+            SET_PDU_HEADR(cmd_hdr, alias - snd_buffer, submit_multi, 0, seq_num);
             iCpy(snd_buffer, &cmd_hdr, sizeof(cmd_hdr));
 
             if ( tcp.Send(snd_buffer, alias - snd_buffer) < 0)
-            {
-                err_desc = strerror(errno);
                 return -1;
-            } // end if
 
             Bulk_Sms_Info info{MSG_STATE_SENT, "", msg, dest_nums};
-            // iCpy(&info.opts, poptions, 13 + poptions->schedule_delivery_time.length() + 
-            //     poptions->validity_period.length());
-            queued_blk_msg.emplace(cmd_hdr.sequence_num, info);
+            CPY_OPTIONS(info.opts, poptions);
+            queued_blk_msg.emplace(ntohl(cmd_hdr.sequence_num), info);
 
             if (bdebug)
               Dump_Hex(snd_buffer, alias - snd_buffer);
@@ -974,8 +953,8 @@ int Sms::Submit_Multi(const std::string &msg, std::queue<std::string> dest_nums,
         } // end if bounded
         else 
         {
-          err_desc = "Not authorized. Please Bind interface first.";
-          return -2;
+            snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
+            return -2;
         } // end else
 
         len -= 254;
@@ -1008,7 +987,7 @@ int Sms::Query(const std::string &msg_id, const Smpp_Options_Ptr poptions,
     // skip over source_addr_ton, source_addr_npi, source_addr
     if (msg_id.length() > 64)
     {
-        err_desc = "Invalid msg_id to query: " + msg_id;
+        snprintf(err_desc, MAXLINE, "Invalid msg id to query %s", msg_id.c_str());
         return -2;
     } // end if
 
@@ -1031,10 +1010,7 @@ int Sms::Query(const std::string &msg_id, const Smpp_Options_Ptr poptions,
     SET_PDU_HEADR(cmd_hdr, alias - snd_buffer, query_sm, 0, ++seq_num);
     iCpy(snd_buffer, &cmd_hdr, sizeof(cmd_hdr));
     if ( tcp.Send(snd_buffer, alias - snd_buffer) < 0)
-    {
-        err_desc = strerror(errno);
         return -1;
-    } // end if error
 
     if (bdebug)
         Dump_Hex(snd_buffer, alias - snd_buffer);
@@ -1054,12 +1030,12 @@ int Sms::Query(const std::string &msg_id, const Smpp_Options_Ptr poptions,
  * 
  * @return int 0 on success alias -ve. 
  */
-int Sms::Query_Rsp(const char *buffer, const size_t len)
+int Sms::Handle_Query(char *err, const size_t buf_len)
 {
     if (cmd_rsp.command_status == ESME_ROK)
     {
         // skipping over msg_id and final_date
-        const char *alias = buffer + (strlen(buffer));
+        const char *alias = rcv_buffer + sizeof(cmd_hdr) + strlen(rcv_buffer);
         std::string final_date = alias;
         alias += final_date.length();
 
@@ -1105,7 +1081,9 @@ int Sms::Query_Rsp(const char *buffer, const size_t len)
                     if (it2 != queued_blk_msg.end())
                         queued_blk_msg.erase(cmd_rsp.sequence_num);
 
-                    err_desc = "Message is either deleted, expired, undliverable, invalid, or rejected.";
+                    snprintf(err, buf_len, 
+                        "Message is either deleted, expired, undliverable, \
+                        invalid, or rejected. Error code = %d", *((const u8 *)alias));
                 } // end if not from single
                 return -2;
             } break;
@@ -1114,10 +1092,9 @@ int Sms::Query_Rsp(const char *buffer, const size_t len)
     } // end if
     else
     {
-        char buf[128];
-        snprintf(buf, 128, "Query_Rsp returned error: 0x%X.\n", 
+        snprintf(err, buf_len, "Handle_Query returned error: 0x%08X.\n", 
             cmd_rsp.command_status);
-        err_desc = buf;
+
         return -2;
     } // end else
 
@@ -1141,7 +1118,7 @@ int Sms::Cancel(const std::string msg_id, const Smpp_Options_Ptr popts,
 {
     if (!(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if not bounded
 
@@ -1162,15 +1139,12 @@ int Sms::Cancel(const std::string msg_id, const Smpp_Options_Ptr popts,
     *alias++ = popts->dest_npi;
     *alias = 0x0;       // null dests since we've message id
 
-    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr) + (alias - snd_buffer), cancel_sm, 
+    SET_PDU_HEADR(cmd_hdr, (alias - snd_buffer), cancel_sm, 
         ESME_ROK, ++seq_num);
     iCpy(snd_buffer, &cmd_hdr, sizeof(cmd_hdr));
 
     if ( tcp.Send(snd_buffer, alias - snd_buffer) < 0)
-    {
-        err_desc = strerror(errno);
-        return -2;
-    } // end if sending not kool
+        return -1;
 
     if (bdebug)
         Dump_Hex(snd_buffer, alias - snd_buffer);
@@ -1197,7 +1171,7 @@ int Sms::Replace(const std::string msg_id, const Smpp_Options_Ptr popts,
 {
     if (!(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if not bounded
 
@@ -1227,16 +1201,16 @@ int Sms::Replace(const std::string msg_id, const Smpp_Options_Ptr popts,
     iCpy(alias, msg.c_str(), msg.length());
     *alias = 0x0;
 
-    SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr) + (alias - snd_buffer), replace_sm, 
+    SET_PDU_HEADR(cmd_hdr, (alias - snd_buffer), replace_sm, 
         ESME_ROK, ++seq_num);
     iCpy(snd_buffer, &cmd_hdr, sizeof(cmd_hdr));
 
     if ( tcp.Send(snd_buffer, alias - snd_buffer) < 0)
-    {
-        err_desc = strerror(errno);
-        return -2;
-    } // end if
+        return -1;
 
+    if (bdebug)
+        Dump_Hex(snd_buffer, alias - snd_buffer);
+    
     return 0;
 } // end Replace
 
@@ -1252,15 +1226,18 @@ int Sms::Enquire()
 {
     if ( !(sms_state & SMS_BOUNDED))
     {
-        err_desc = "Not authorized. Please Bind interface first.";
+        snprintf(err_desc, MAXLINE, "Not authorized. Please Bind interface first.");
         return -2;
     } // end if not connected
 
     SET_PDU_HEADR(cmd_hdr, sizeof(cmd_hdr), enquire_link, 0, ++seq_num);
+    if ( tcp.Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
+        return -1;
+
     if (bdebug)
       Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
 
-    return tcp.Send((const char*)&cmd_hdr, sizeof(cmd_hdr));
+    return 0;
 } // end Enquire
 
 
@@ -1283,10 +1260,7 @@ int Sms::Enquire_Rsp(const u32 resp)
         cmd_hdr.sequence_num);
 
     if ( tcp.Send((const char*)&cmd_hdr, sizeof(cmd_hdr)) < 0)
-    {
-        err_desc = strerror(errno);
         return -1;
-    } // end if error
 
     if (bdebug)
       Dump_Hex((const char*)&cmd_hdr, sizeof(cmd_hdr));
@@ -1316,10 +1290,7 @@ int Sms::Deliver_Rsp(const u32 resp)
 
     iCpy(snd_buffer, (char *)&cmd_hdr, sizeof(cmd_hdr));
     if ( tcp.Send(snd_buffer, sizeof(cmd_hdr) + 1) < 0)
-    {
-        err_desc = strerror(errno);
         return -1;
-    } // end if error
 
     return 0;
 } // end Deliver_Rsp
@@ -1337,35 +1308,24 @@ int Sms::Deliver_Rsp(const u32 resp)
  * @param len length of the extra info above
  * @return int 
  */
-int Sms::Process_Incoming()
+int Sms::Process_Incoming(char *err, const size_t buf_len)
 {
     // let's get ready to handle this sms message, we'll do it in two parts, first
     //  we read the command header struct, followed by any extra data.
     iZero((char *)&cmd_rsp, sizeof(cmd_rsp));
-    int n = tcp.Recv((char *)&cmd_rsp, sizeof(cmd_rsp));
-    if (n <= 0)
-    {
-        if (n == 0)
-            return -3;       // a socket closed by peer
+    int n = tcp.Recv(rcv_buffer, SMS_BUFFER_SIZE);
+    if (n < 0)
+        return n;
 
-        return -1;
-    }
-
+    iCpy(&cmd_rsp, rcv_buffer, sizeof(cmd_rsp));
     HOST_ENDIAN(cmd_rsp);
-    n = tcp.Recv(rcv_buffer, cmd_rsp.command_length - n);
-    if (n <= 0)
-    {
-        if (n <= 0)
-            return -3;      // socket closed by peer
-
-        return - 1;
-    }
-
     if (bdebug)
     {
-        Dump_Hex((const char*)&cmd_rsp, sizeof(cmd_rsp));
         Dump_Hex(rcv_buffer, n);
     } // end if
+
+
+    int ret;        // store's return values
 
     // now let's act on the response and do stuff up (like updating dbs and all)
     switch (cmd_rsp.command_id)
@@ -1374,50 +1334,45 @@ int Sms::Process_Incoming()
         case bind_receiver_resp:
         case bind_transceiver_resp:
         {
-            printf("Bind RSP: 0x%X\n", cmd_rsp.command_id);
-            Bind_Rsp();
-        } return 0;
+            if ( (ret = Handle_Bind(err, buf_len) < 0))
+                return ret;
+
+            Print("Interface bound to SMSC: " + smsc_id);
+        } break;
 
         case unbind:
         {
-            std::cout << "Unbinding request from peer" << std::endl;
             Unbind_Resp();
-            bheartbeat = false;
             Shutdown();
-        } return 0;
+
+            Print("Unbound and disconnected.");
+        } break;
 
         case unbind_resp:
         {
-            std::cout << "Unbind response" << std::endl;
-            sms_state = SMS_CONNECTED;
-            bheartbeat = false;
-            //Shutdown();
-        } return 0;
+            if (Handle_Unbind(err, buf_len) < 0)
+                return -1;
+
+            Print("Unbind response.");
+        } break;
 
         case submit_sm_resp:
         {
-            std::cout << "Submit response" << std::endl;
-            if (cmd_rsp.command_status != ESME_ROK)
-            {
-                err_desc = "Submit failed with code: " + cmd_rsp.command_status;
+            if (Handle_Submit(err, buf_len) < 0)
                 return -1;
-            } // end if not cool
 
-            auto it = queued_msg.find(cmd_rsp.sequence_num);
-            if (it != queued_msg.end())
-            {
-                it->second.id = rcv_buffer;
-                it->second.msg_state = MSG_STATE_SUBMIT;
-            } // end if message found
-        } return 0;
+            Print("Submit Response. Message ID = " + 
+                queued_msg[cmd_rsp.sequence_num].id);
+        } break;
 
         case submit_multi_resp:
         {
             std::cout << "Submit multi response" << std::endl;
             if (cmd_rsp.command_status != ESME_ROK)
             {
-                err_desc = "Submit multi failed with code: " + cmd_rsp.command_status;
-                return -1;
+                snprintf(err_desc, MAXLINE, "Submit mulit failed with error code: 0x%08X",
+                    cmd_rsp.command_status);
+                return -2;
             } // end if not cool
 
             auto it = queued_blk_msg.find(cmd_rsp.sequence_num);
@@ -1426,68 +1381,232 @@ int Sms::Process_Incoming()
                 it->second.id = rcv_buffer;
                 it->second.msg_state = MSG_STATE_SUBMIT;
             } // end if message found
-        } return 0;
+        } break;
 
         case deliver_sm:
         {
-            std::cout << "A delivery" << std::endl;
-            cmd_hdr.sequence_num = cmd_rsp.sequence_num;
-            Deliver_Rsp();
-        } return 0;
+            std::string phone_no;
+            if ( (ret = Handle_Deliver(err, buf_len, phone_no)) < 0)
+                return ret;
 
-        case deliver_sm_resp:
-        {
-            std::cout << "A delivery report response" << std::endl;
+            Print("Delivery confirmation from number: " + phone_no);
         } break;
 
         case query_sm_resp:
         {
-            std::cout << "A query response" << std::endl;
-            Query_Rsp(rcv_buffer, n);
-        } return 0;
+            if (Handle_Query(err, buf_len) < 0)
+                return -1;
+
+            Print("Query response.");
+        } break;
 
 
         case cancel_sm_resp:
         case replace_sm_resp:
         {
             std::string rsp = cmd_rsp.command_id == cancel_sm_resp ? "cancel_sm_resp" : "replace_sm_resp";
-            std::cout << rsp << " response" << std::endl;
 
             if (cmd_rsp.command_status != ESME_ROK)
             {
-                char buf[128];
-                snprintf(buf, 128, "%s returend error code: 0x%X.", 
+                snprintf(err, buf_len, "%s returend error code: 0x%X.", 
                     rsp.c_str(), cmd_rsp.command_status);
-                err_desc = buf;
                 return -2;
             } // end if
-        } return 0;
+
+            Print(rsp + " response.");
+        } break;
 
         case enquire_link:
         {
-            std::cout << "Enquire link" << std::endl;
             cmd_hdr.sequence_num = cmd_rsp.sequence_num;
-            Enquire_Rsp();
-        } return 0;
+            if (Enquire_Rsp() < 0)
+                return -1;
+
+            Print("Enquire link.");
+        } break;
 
         case enquire_link_resp:
         {
-            std::cout << "Enquire link resp" << std::endl;
             // do nothing ...
-        } return 0;
+            Print("Enquire link response.");
+        } break;
 
         case outbind:
         {
-            std::cout << "Outbind" << std::endl;
-            Outbind();
-        } return 0;
+            if (Outbind() < 0)
+                return -1;
+
+        } break;
 
         default:
             Generic_Nack();
+            Print("Negative Ack.");
     } // end switch
 
     return 0;
 } // end Process_Incomming
+
+
+
+//===============================================================================|
+/**
+ * @brief Handles the bind_resp signal sent from SMCS.
+ * 
+ * @param err used to get error codes as a result of this call
+ * @param buf_len the length of buffer for storage
+ * 
+ * @return int 0 on success, -ve on fail. 
+ */
+int Sms::Handle_Bind(char *err, const size_t len)
+{
+    if (cmd_rsp.command_status != ESME_ROK)
+    {
+        if (cmd_rsp.command_status == ESME_RINVCMDID)
+        {
+            snprintf(err, len, "SMCS does not support bind_trx.");
+            int ret;
+            if ( (ret = Bind(bind_transmitter)) < 0)
+                return ret;
+        } // end if bind trx fail
+        else 
+        {
+            snprintf(err, len, "Bind failed with error code = 0x%X", 
+                cmd_rsp.command_status);
+            return -2;
+        } // end else bind fail for other reason
+    } // end if status not ok
+
+    sms_state |= SMS_BOUNDED;
+    smsc_id = rcv_buffer + sizeof(cmd_rsp);
+
+    // igonre TLV if any
+
+    return 0;
+} // end Handle_Bind
+
+
+
+//===============================================================================|
+/**
+ * @brief Handles unbind responses, termiates the session for the object
+ * 
+ * @param err used to get error codes as a result of this call
+ * @param buf_len the length of buffer for storage
+ * 
+ * @return int 0 on success alas -ve on fail
+ */
+int Sms::Handle_Unbind(char *err, const size_t buf_len)
+{
+    if ( !(sms_state & SMS_CONNECTED))
+        return 0;
+
+    sms_state = SMS_CONNECTED;
+    return Shutdown();
+} // end Unbind_Resp
+
+
+
+//===============================================================================|
+/**
+ * @brief Handles submit_sm_resp sent from SMCS. It simply saves the message_id
+ *  from the SMCS into the application queue for later tracking and changes the
+ *  message state to MSG_STATE_SUBMIT.
+ * 
+ * @param err used to get error codes as a result of this call
+ * @param buf_len the length of buffer for storage
+ * 
+ * @return int 0 on success -ve on fail, when -2 the parameter contains a null
+ *  terminated string containing the error description.
+ */
+int Sms::Handle_Submit(char *err, const size_t buf_len)
+{
+    if (cmd_rsp.command_status == ESME_ROK)
+    {
+        auto imsg = queued_msg.find(cmd_rsp.sequence_num);
+        if (imsg != queued_msg.end())
+        {
+            imsg->second.id = rcv_buffer + sizeof(cmd_rsp);
+            imsg->second.msg_state = MSG_STATE_SUBMIT;
+        } // end if on queue
+
+        return 0;
+    } // end if all is OK
+
+    snprintf(err, buf_len, "Submit failed with code: 0x%08X", 
+        cmd_rsp.command_status);
+
+    return -2;
+} // end Handle_Submit
+
+
+
+//===============================================================================|
+int Sms::Handle_Deliver(char *err, const size_t buf_len, std::string &phone_no)
+{
+    u32 payload_length = cmd_rsp.command_length - sizeof(cmd_rsp);
+
+
+    DeliverQueue dq;
+
+    // now get the source phone no and msg
+    char *alias = rcv_buffer + sizeof(cmd_rsp);
+    alias += strlen(rcv_buffer) + 3;     // skip over the service type, src_npi and
+        //  src_ton
+
+    phone_no = alias;  // should be pointing at phone #
+    alias += strlen(alias) + 3; // skip src phone, dest_npi & ton
+
+    alias += strlen(alias) + 10;    // skip over esm_class, protocol_id, priorty_flag,
+        // schedule_delivery_time, validity_period, registered_delivery, replace_if_present_flag,
+        //  data_coding, sm_default_message_id
+
+    u8 len = *((u8 *)alias);         // length of message
+    // if (len == 0)
+    // {
+    //     snprintf(err, buf_len, "Driver does not support long message reception.");
+    //     return -2;
+    // } // end if not cool
+
+    std::string msg = ++alias;
+    
+    // find a message id if there is one...
+    alias += len;       // to the start of TLV
+
+    u16 tlv_code = *((u16*)alias);
+    while (tlv_code != RECIEPTED_MESSAGE_ID && (alias - rcv_buffer) < payload_length)
+    {
+        alias += 2;
+        u16 tl = *((u16*)alias);
+        alias += htons(tl) + 2;
+        tlv_code = *((u16*)alias);
+    } // end while looking for RECIPTED_MESSAGE_ID
+
+    if (tlv_code == RECIEPTED_MESSAGE_ID)
+    {
+        alias += 4; // skips T and L and points at V
+        std::string msg_id = alias;
+
+        //Update_SMS_DB(msg_id, 4);
+        
+        // now remove item from queue
+        auto it = std::find_if(queued_msg.begin(), queued_msg.end(), [msg_id](const auto &m){
+            return m.second.id == msg_id;
+        });
+
+        if (it != queued_msg.end())
+            queued_msg.erase(it->first);
+
+        if (Deliver_Rsp() < 0)
+            return -1;
+
+    } // end if delivery confirmation
+    else
+    {
+        
+    } // end else rcvd message
+
+    return 0;
+} // end Handle_Deliver
 
 
 
@@ -1512,4 +1631,6 @@ void Heartbeat(Sms *psms)
             sleep(psms->heartbeat_interval);
         } // end while
     } // end if bounded
+
+    psms->bheartbeat = false;
 } // end Heartbeat

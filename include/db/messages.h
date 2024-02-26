@@ -31,6 +31,7 @@
 //          INCLUDES
 //===============================================================================|
 #include "iQE.h"
+#include "utils.h"
 
 
 
@@ -68,6 +69,7 @@ typedef struct SMSIN_TABLE_TYPE
 
 
 
+
 class Messages
 {
 public:
@@ -78,16 +80,39 @@ public:
 
     int Connect_DB(const std::string &con_str);
     int Disconnect_DB();
-    void Get_Unsent_Messages(SmsOut_Ptr pmsg);
-    void Set_Message();
 
+    std::vector<SmsOut> Load_Messages();
+    int Load_Current_Period();
+    int Load_Reading_Period();
+    std::string Load_Current_Period_Name();
+    std::string Load_Reading_Period_ToDate();
+    int Load_AID();
+    int Load_Last_Message_ID();
+    int Update_Last_Message_ID() const;
+    std::string Load_SMS_Bill_Format();
+    std::string Load_Unread_Format();
+    std::vector<SmsOut> Preview_Bill_SMS(const int subscriber_id = -1);
+    std::vector<SmsOut> Preview_Reading_SMS(const int subscriber_id = -1);
+    std::vector<SmsOut> Preview_General_SMS(const int subscriber_id = -1);
 
+    void Write_SMSOut(std::vector<SmsOut> &msgs);
+    void Update_SMSOut(SmsOut_Ptr msg);
+    void Write_SMSIn(SmsIn_Ptr msg);
+
+    
 private:
 
-    u8 db_state;        // one of the following state; dis/connected, cursor_open/closed
+    
+    // ol'skool WSIS stuff
+    u32 period_id;
+    u32 reading_period;
+    u32 audit_id;
+    u32 last_msg_id;
 
-    SmsOut sms_out;
-    SmsIn sms_in;
+    std::string period_name;
+    std::string bill_format;
+    std::string unread_format;
+    std::string msg_format;
 
 
     // ODBC database stuff

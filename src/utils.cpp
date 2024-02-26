@@ -163,3 +163,66 @@ std::string Console_Out(const std::string app_name)
 
     return buf;
 } // end display_time
+
+
+
+//=====================================================================================|
+/**
+ * @brief Neatly replaces the string patt from str using the string replace. It basically
+ *  splits the string in half and insert's the replace string in between.
+ * 
+ * @param str the original string
+ * @param patt the pattern to replace
+ * @param replace the replacemebt string
+ * 
+ * @return std::string a new string containing the replaced string in between on succes
+ *  alas the orignal string str is returned
+ */
+std::string Replace_String(std::string str, const std::string patt, const std::string replace)
+{
+    size_t pos;
+    if (( pos = str.find(patt)) != std::string::npos)
+    {
+        str = str.substr(0, pos) + replace +  
+            str.substr(pos + patt.length(), str.length() - pos);
+    } // end find
+
+    return str;
+} // end Replace_String
+
+
+
+//=====================================================================================|
+/**
+ * @brief Format's the numerical value with comma's. Useful in financial apps where its
+ *  common to format numerics in such manner.
+ * 
+ * @param num the number to format
+ * 
+ * @return std::string a formatted numerical string 
+ */
+std::string Format_Numerics(const double num)
+{
+    std::ostringstream ostream;
+    ostream << std::setprecision(2) << std::fixed << num;
+
+    std::string s{ostream.str()};
+    int pos = s.find(".");
+
+    for (int i = pos - 3; i >= 1; i -= 3)
+    {
+        char t = s[i];
+
+        for (int j = i + 1; j < (int)s.length(); j++)
+        {
+            char k = s[j];
+            s[j] = t;
+            t = k;
+        } // end nested for
+
+        s[i] = ',';
+        s += t;
+    } // end for
+
+    return s;
+} // end Format_Numerics

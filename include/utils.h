@@ -60,7 +60,8 @@ int Init_Configuration(const std::string &filename);
 void Dump_Hex(const char *buf, const size_t len);
 std::vector<std::string> Split_String(const std::string &str, const char token);
 std::string Console_Out(const std::string app_name);
-
+std::string Replace_String(std::string str, const std::string patt, const std::string replace);
+std::string Format_Numerics(const double num);
 
 
 #endif
